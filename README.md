@@ -42,6 +42,7 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
   - [Sampling temperature](#sampling-temperature)
   - [Concurrency](#concurrency)
   - [Levers that measured empty](#levers-that-measured-empty)
+  - [The 4.05 bpw revision](#the-405-bpw-revision)
 - [How things were measured](#how-things-were-measured)
 - [Hardware, model, memory](#hardware-model-memory)
 - [Historical results (2026-09-07 and 09-08, earlier build)](#historical-results-2026-09-07-and-09-08-earlier-build)
@@ -126,6 +127,14 @@ This runs, in order:
    `ngram_embedding.safetensors` and the MTP patch file to
    `model.safetensors.index.json`, which vLLM uses as the load list (backs up
    `.native`).
+
+If the pack's n-gram table is one unsharded tensor rather than 128 shards (the
+`4.05bpw_h6_ng6` revision ships this way; newer exllamav3 writes it so), run
+this first, or the boot OOMs in seconds:
+
+```bash
+python scripts/rename_unsharded_ngram.py ~/models/Qwen3.8-Flash-Next-exl3-4.05bpw
+```
 
 Optional GPU verification gates ship in `tools/verify_native_pack/`
 (`test_ngram_embedding.py`, `mul1_check.py`, `pad_check.py`,
@@ -376,6 +385,55 @@ Recorded so nobody re-tests them:
 | `--kv-cache-dtype fp8` | refused: `Qwen4Exp QSA requires a BF16 main KV cache` |
 | MTP k=4 | wedges the engine after torch.compile |
 
+### The 4.05 bpw revision
+
+turboderp also publishes `4.05bpw_h6_ng6`: dense linears at K=6 and experts at
+K=4 (against K=5 and K=3), a 6-bit n-gram table, 107.5 GB on disk. Measured on
+the same build and harness. It needs `--gpu-memory-utilization 0.92` to boot at
+all, and a 131,072 context:
+
+| | 3.05 bpw | 4.05 bpw |
+|---|---:|---:|
+| Model resident | 79 GiB | **100.81 GiB** |
+| n-gram table, packed | 30.4 GiB | 36.36 GiB |
+| Utilisation needed | 0.80 | **0.92** |
+| Max context that boots | 262,144 | **131,072** |
+| KV pool | 416,163 tokens (1.6x at 262k) | 195,509 tokens (1.49x at 131k) |
+| MemAvailable while serving | 17 to 18 GiB | **3.4 GiB ready, 2.5 GiB under load** |
+| Decode @ 4k, MTP k=3 | 52.22 | 48.70 |
+| Decode @ 32k, MTP k=3 | 50.53 | 51.31 |
+| Cold prefill @ 24k | 1,142 | 1,137 |
+| Draft acceptance | 68% | **74%** |
+
+**Speed is unchanged within noise.** Decode at 4k and 32k and cold prefill all
+land inside the 3.05 pack's sample spread. That is consistent with the profiler
+finding that decode is bound by trellis dequantization rather than bytes moved:
+the per-weight dequant cost does not grow much with K. The one speed-adjacent
+gain is acceptance, 68% to 74%, a higher-precision target agreeing with its
+draft more often.
+
+**The cost is entirely memory, and it is severe.** 22 GiB more resident,
+utilisation forced to 0.92, and half the context. At 0.92 the box sits under
+earlyoom's 3% trigger and survives only because swap is free; a 262k attempt at
+0.93 without a draft drove MemAvailable to 1 GiB during load and was killed by
+the watchdog before KV allocation. **The 4.05 revision does not reach 262k on
+one Spark, with or without a draft**, and the configuration that does boot is
+not one to serve from. Quality was not measured here; that needs the sixcat
+harness from the historical comparison.
+
+One thing to know before trying it. This revision ships the n-gram table as one
+unsharded `ngram_embedding.trellis` tensor (`I16 [320001536, 61]`, 39 GB)
+where 3.05 ships 128 `shard_N.trellis` shards. vllm-exl3 0.4.2's loader builds
+`shard_{i}` modules and checks `shard_0.trellis` by name, its scan tool matches
+only `shard_N`, and the exllamav3 1.4.7 on the box reads only `shard_` too, so
+the pack comes from a newer exllamav3 and the tooling is behind the format.
+Unhandled, the scan misfiles the tensor as a K=3 dense linear, the config step
+emits `ngram_embedding: None`, vLLM allocates the table dense, and the boot
+OOMs in about 100 seconds. `scripts/rename_unsharded_ngram.py` renames it to
+`shard_0.trellis` in place (streamed, backed up, hash-checked), after which the
+stock prep and loader handle it as a one-shard table with no code change. The
+proper fix is in the plugin's loader and scan tool.
+
 ## How things were measured
 
 **Decode** is `(completion_tokens - 1) / (wall - TTFT)`, counting tokens from
@@ -562,6 +620,8 @@ head, so it is not usable yet. NVFP4 does not fit on one Spark for this model:
   out.
 - **No scaling past two concurrent streams.** Aggregate plateaus at about 78
   tok/s with MTP k=3 and 45 without. See Concurrency.
+- **The 4.05 bpw revision does not fit at 262k**, needs util 0.92 for 131k, and leaves 2 to 3 GiB free. See The 4.05 bpw revision.
+- **Unsharded n-gram tables** (4.05 revision, newer exllamav3) are not recognised by the prep tool or loader; `scripts/rename_unsharded_ngram.py` is the workaround.
 - **Cold prefill ceiling of about 1,100 tok/s**, not improved by chunk size.
   Likely the quantized-weight path; unconfirmed without a prefill profile.
 - Fat-expert prefill bug (fixed 2026-09-08, vllm-exl3 PR #5). Before the fix,
@@ -598,6 +658,7 @@ head, so it is not usable yet. NVFP4 does not fit on one Spark for this model:
 | `ModuleNotFoundError: No module named 'exllamav3_ext'` | build exllamav3 1.4.7 from source with the aarch64 patch; the pure-Python wheel is not enough |
 | `ValueError: No available memory for the cache blocks` | `--gpu-memory-utilization` too low for weights plus KV; use 0.80 |
 | `ValueError: To serve at least one request with the model's max seq len ... larger than the available KV cache memory` | activation memory (usually a large `--max-num-batched-tokens`) ate the KV pool; lower the chunk or raise util to 0.85 |
+| boot OOMs within ~100 s of starting to load, `expandable_segments: memory mapping failed` with the device full, and the prep log said `ngram_embedding: None` | the pack's n-gram table is one unsharded tensor and got no quant spec, so it was allocated dense. Run `scripts/rename_unsharded_ngram.py <pack>` then `prepare_pack.sh` again; look for `n-gram embedding ready: 1 shards x ... packed` |
 | `NotImplementedError: Qwen4Exp QSA requires a BF16 main KV cache` | `--kv-cache-dtype fp8` is not supported on this path; remove it |
 | `max_num_scheduled_tokens is set to 2048 based on the speculative decoding settings` | informational; raising the chunk was measured at +2%, ignore |
 | decode collapses to ~22 tok/s on very long prompts with MTP on | the acceptance cliff at 163,840 prompt tokens; use `SPEC_CONFIG=none` for that workload |

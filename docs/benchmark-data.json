@@ -378,6 +378,63 @@
     "max-num-batched-tokens 16384 vs 2048: +2% prefill",
     "kv-cache-dtype fp8: refused, QSA requires BF16 main KV cache"
    ]
+  },
+  "revision_405": {
+   "measurement_date": "2026-09-13",
+   "note": "Same build and harness as the envelope. 4.05 needs util 0.92 and 131,072 context to boot; a 262k attempt at 0.93 drove MemAvailable to 1 GiB and was killed by the watchdog before KV allocation.",
+   "rows": [
+    {
+     "metric": "model_resident_gib",
+     "p305": 79.0,
+     "p405": 100.81
+    },
+    {
+     "metric": "ngram_packed_gib",
+     "p305": 30.4,
+     "p405": 36.36
+    },
+    {
+     "metric": "gpu_memory_utilization",
+     "p305": 0.8,
+     "p405": 0.92
+    },
+    {
+     "metric": "max_context_that_boots",
+     "p305": 262144,
+     "p405": 131072
+    },
+    {
+     "metric": "kv_pool_tokens",
+     "p305": 416163,
+     "p405": 195509
+    },
+    {
+     "metric": "memavailable_gib",
+     "p305": 17.5,
+     "p405": 3.4
+    },
+    {
+     "metric": "decode_4k_mtp_k3",
+     "p305": 52.22,
+     "p405": 48.7
+    },
+    {
+     "metric": "decode_32k_mtp_k3",
+     "p305": 50.53,
+     "p405": 51.31
+    },
+    {
+     "metric": "prefill_24k",
+     "p305": 1142.3,
+     "p405": 1137.0
+    },
+    {
+     "metric": "acceptance",
+     "p305": 0.68,
+     "p405": 0.741
+    }
+   ],
+   "finding": "Speed unchanged within noise; acceptance up 68 to 74 percent; cost is 22 GiB more resident, util 0.92, half the context, 2 to 3 GiB free, and no 262k on one Spark."
   }
  }
 }
