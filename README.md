@@ -24,11 +24,12 @@ speculation becomes a 21% loss. The serve script defaults to the first and
 warns about the second.
 
 **Interactive benchmark:** [animated viewer](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/)
-with five scenes
+with six scenes
 ([sweep](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/?scene=sweep) ·
 [long prompt](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/?scene=long) ·
 [cliff](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/?scene=cliff) ·
-[scaling](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/?scene=scale)),
+[scaling](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/?scene=scale) ·
+[4.05 bpw](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/?scene=revision)),
 PNG export, and downloadable data. It displays saved results and does not run
 inference. Source and local-render notes are in [docs/README.md](docs/README.md).
 
