@@ -1,57 +1,56 @@
 # Interactive Qwen benchmark
 
-Static, landscape presentation of this recipe's recorded measurements. This is
-not a live model demo and does not run an inference benchmark in the browser.
+Current, static 16:9 presentation of the measured **Qwen3.8-Flash-Next EXL3** serving envelope on **one NVIDIA DGX Spark**. It is not a live model demo and does not run inference in the browser.
 
-## View and share
+## View
 
-[Open the animated benchmark](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/)
+[Open the current benchmark](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/)
 
-The website is `docs/index.html`. The small root `index.html` redirects here,
-preserving the query string and fragment. This supports both GitHub Pages
-source choices: `main / (root)` and `main /docs`. No separate website repository
-or custom build workflow is required.
+The page was rebuilt on 2026-09-14 so the default scenes no longer lead with the superseded Sep 7/8 measurements. Historical data remains in the main repository README for provenance; this viewer intentionally leads with the current Sep 13/14 envelope.
 
-The same `docs/index.html` opens directly as a local file in a modern desktop
-browser. CSS, JavaScript, charts, and the data snapshot are embedded. Viewing
-and exporting need no npm install, API key, web server, model, or DGX Spark.
+Current headline results:
 
-Scene and recording links:
+- direct ExLlamaV3 1.5.0: **58.8 tok/s** single stream
+- vLLM + vllm-exl3: **157.6 tok/s** steady aggregate at 8 short-prompt streams
+- full **262,144-token configured context** on the 3.05 bpw pack
+- vLLM MTP k=3: roughly **50–53 tok/s** below the 163,840-prompt acceptance cliff
+- 196K-token cached-prefix TTFT: **1.56 s**, versus **178.72 s** cold
+- 4.05 bpw with the packed n-gram table on NVMe: **262K boots**, **954,453-token KV pool**, **18–20 GiB** available memory
 
-- `?scene=overview`: completed overview frame
-- `?scene=sweep`: MTP draft-depth sweep
-- `?scene=long`: separate long-prompt probe
-- `?scene=sweep&clean=1`: sweep with controls hidden
-- `?autoplay=1`: three-second countdown, then a 19.5-second tour
-- `?autoplay=1&loop=1`: repeat the tour
+## Scenes
 
-Use **Copy link** or the links in **Info** to share the current scene. Copied
-links use the current website origin and path, including on forks. A local
-file does not pretend to have a public URL.
+- `?scene=overview` — current one-Spark headline numbers
+- `?scene=speed` — current MTP k=3 / k=2 / no-draft single-stream sweep
+- `?scene=context` — context curve and the 163,840 prompt-token MTP acceptance cliff
+- `?scene=scale` — steady-state concurrency scaling
+- `?scene=cache` — 196K-token prefix-cache TTFT
+- `?scene=revision` — 4.05 bpw resident vs NVMe n-gram-table mode
+- `?scene=engines` — direct ExLlamaV3 vs vLLM + vllm-exl3 serving tradeoff
 
-## Screen recording and export
+Add `&clean=1` for controls-free capture. `?autoplay=1` cycles through the seven current scenes. Keyboard: **1–7** selects scenes, arrows move between scenes, **F** toggles fullscreen, **H** hides or restores controls.
 
-Choose **Fullscreen**, start the screen recorder, then **Start 19.5s tour**.
-After the three-second countdown, the controls and cursor disappear. Each
-scene holds for 6.5 seconds, and the tour finishes on the completed overview.
+## Engine framing
 
-- **H** restores or hides controls; mouse movement does not reveal them.
-- **Space** pauses or resumes; **R** restarts the tour.
-- **1/2/3** or arrow keys select scenes; **S** freezes a completed frame.
-- **F** toggles fullscreen. Browser fullscreen permission requires a user action.
-- **Save PNG** exports the current completed scene at 1920x1080, without controls.
+Direct ExLlamaV3 is the leaner and faster measured single-user path on this pack. For production/API use, another serving layer such as TabbyAPI is normally added.
 
-The card scales to fit a landscape screen without scrolling. Other aspect
-ratios are letterboxed, not cropped. **Info** contains source references,
-measurement scope, and standalone HTML/data download buttons.
+The vLLM path exists for the complete serving stack: `vllm-exl3` integrates EXL3 into vLLM so the recipe can use the OpenAI-compatible API, reasoning/tool-call parsers, structured output, prefix caching, batching/concurrency, and broader vLLM tooling out of the box.
 
-The animation reveals bars and decorative effects, not changing measurements.
-Numeric labels remain the recorded values. Hidden browser tabs pause playback;
-reduced-motion preferences suppress animated chart reveals.
+## Data and methodology
 
-## Render PNGs locally without model hardware
+`docs/benchmark-data.json` is the current presentation dataset. It intentionally contains the current Sep 13/14 serving envelope rather than the old headline sweep. The main README remains the detailed source of methodology, historical comparisons, limitations, and exact runtime notes.
 
-Optional Python setup, from the repository root:
+Important boundaries:
+
+- The **163,840** number is a **prompt-token MTP acceptance cliff**, not the configured context ceiling. The configured model context remains 262,144.
+- Decode excludes TTFT.
+- Cold prefill uses unique prefixes and was checked against vLLM's own prefix-cache counters.
+- Concurrency scenes use **steady aggregate** throughput over the interval where every stream is decoding; this avoids the old window metric that made vLLM look like it plateaued at two streams.
+- The 4.05 bpw NVMe mode is a deliberate memory/speed trade: the packed n-gram table stays file-backed, enabling full context and much more KV headroom at some decode cost.
+- This page presents recorded measurements only. It does not establish new quality results.
+
+## Render PNGs locally
+
+Optional setup:
 
 ```sh
 python -m pip install playwright
@@ -59,61 +58,12 @@ python -m playwright install chromium
 python scripts/render_benchmark.py
 ```
 
-This writes three 1920x1080 PNGs and `render-report.json` to
-`benchmark-renders/`. The renderer invokes the page's own Canvas rendering at
-a fixed animation time, checks that the embedded JSON matches
-`docs/benchmark-data.json`, and reports JavaScript errors or unexpected network
-requests. No inference code, model weights, CUDA, or GPU is required.
+This renders all seven scenes to `benchmark-renders/` and reports JavaScript errors or unexpected network requests. No model, CUDA install, or DGX Spark is required to render the presentation.
 
-To select an already installed Chrome/Chromium executable:
+## GitHub Pages
 
-```sh
-python scripts/render_benchmark.py --browser-executable "/path/to/chrome"
-```
-
-Optional arguments: `--html PATH`, `--output PATH`, and
-`--browser-executable PATH`. Quote paths containing spaces on Windows.
-Browser viewing and the **Save PNG** button do not require Python.
-System font rasterization may differ between operating systems.
-
-Playwright documentation: https://playwright.dev/python/docs/library
-
-## GitHub Pages setup for forks or a new deployment
-
-1. Commit the website and data to the publishing branch.
-2. Open **Settings > Pages > Deploy from a branch**.
-3. Select **main**, then **/docs**, and save. Existing **main / (root)**
-   deployments also work because the root entry point redirects to `docs/`.
-4. Wait for **pages build and deployment** to succeed and verify **Visit site**.
-
-Both publishing roots contain `.nojekyll`, so no Jekyll conversion is needed.
-Subsequent pushes to the chosen source are automatically redeployed by GitHub.
-The renderer is a local tool, not a dependency of the Pages deployment.
-
-Official setup:
-https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site
-
-## Source snapshot and measurement boundaries
-
-- Complete MTP k sweep: **32K configured context**, one in-flight request.
-- Separate long-prompt probe: **122,902 input tokens**, **262,144 configured**.
-- KV-pool capacities are shared serving capacity, not measured input lengths.
-- The snapshot comes from the README at commit
-  `ed93c1505835f01c7b28f209d544171199ea5210`. It is not raw per-request GPU logs.
-- Calculated sweep means use all listed rounded run values. Sample sizes differ.
-- Timing and coherent text do not establish quality or full-output equivalence.
-- Whole-model on-device allocation includes the packed PLE table, but not all
-  server caches and scratch memory.
-
-Reproducing the *measurements* requires the main recipe and compatible hardware.
-Rendering this viewer only reproduces the presentation. It is a fixed snapshot,
-not a generic data-import UI. For future results, update the embedded data,
-sidecar, and any fixed display labels together. The renderer rejects mismatches.
+The root `index.html` redirects into `docs/`, preserving query parameters. The repository works with GitHub Pages configured from either `main / (root)` or `main /docs`; both roots include `.nojekyll`.
 
 ## Credits
 
-Pack, codec, and kernels: Turboderp / ExLlamaV3. Engine: vLLM. Integration and
-measurements: Victor Cruz (@ViC305). Consult vllm-exl3's third-party notices for
-code derived from Mia's AI Lab / plotarmordev. This is independent community
-work, not an endorsement. The recipe's existing MIT license applies to these
-presentation files; upstream components retain their own licenses.
+Pack, codec and kernels: Turboderp / ExLlamaV3. Engine: vLLM. EXL3/vLLM integration and measurements: Victor Cruz (@ViC305). See the main repository and `vllm-exl3` notices for upstream attribution and licensing boundaries.
