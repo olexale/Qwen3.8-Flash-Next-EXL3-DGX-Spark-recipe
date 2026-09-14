@@ -1,13 +1,267 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Qwen3.8-Flash-Next EXL3 | One Spark</title><meta name="description" content="Current Qwen3.8-Flash-Next EXL3 serving envelope on one NVIDIA DGX Spark: 58.8 tok/s native, 157.6 tok/s vLLM aggregate, 262K context."><meta name="theme-color" content="#060a13"><meta property="og:title" content="Qwen3.8-Flash-Next EXL3 | One DGX Spark"><meta property="og:description" content="58.8 tok/s native ExLlamaV3. 157.6 tok/s aggregate through vLLM. Full 262K context on one DGX Spark."><meta name="twitter:card" content="summary_large_image"><style>
-:root{color-scheme:dark;--bg:#050812;--p:#0c1527;--e:#263856;--t:#f3f7ff;--m:#94a5c5;--c:#4de7ff;--g:#83f6c7;--v:#ad8cff;--a:#ffd166;--r:#ff6b85}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--t);font:16px/1.35 system-ui,-apple-system,Segoe UI,Arial,sans-serif}body{background:radial-gradient(circle at 18% 12%,#15386b 0,#091324 34%,#04060c 75%)}#deck{position:absolute;inset:0 0 66px;display:grid;place-items:center}.slide{display:none;width:min(calc((100vh - 66px)*1.7777778),100vw);height:min(calc(100vh - 66px),56.25vw);aspect-ratio:16/9;padding:66px 78px 58px;background:linear-gradient(145deg,#091224ee,#050914f5);position:relative;overflow:hidden}.slide.active{display:block}.slide:before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 86% 82%,#3b2d762b,transparent 36%),linear-gradient(90deg,#4de7ff0a,transparent 30%);pointer-events:none}h1{font-size:64px;line-height:1.03;margin:12px 0 10px;letter-spacing:-2px}h2{font-size:42px;margin:10px 0 16px}p{color:var(--m);font-size:22px;margin:8px 0}.k{color:var(--c);font-weight:800;letter-spacing:.12em;text-transform:uppercase;font-size:17px}.hero{display:flex;gap:44px;margin-top:68px}.big{font-size:102px;font-weight:950;line-height:.9;letter-spacing:-4px;text-shadow:0 0 26px currentColor}.unit{font-size:30px;color:#d7e3f8;font-weight:700;margin-left:8px}.g{color:var(--g)}.c{color:var(--c)}.v{color:var(--v)}.a{color:var(--a)}.r{color:var(--r)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:38px}.card{background:#0c1729;border:1px solid var(--e);border-radius:20px;padding:22px 24px;min-height:150px}.card b{display:block;font-size:43px;margin:8px 0}.card small{color:var(--m);font-size:16px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:36px}.bar{margin:24px 0}.bar .label{display:flex;justify-content:space-between;color:#ccd8eb;margin-bottom:8px}.track{height:25px;background:#111d31;border-radius:999px;overflow:hidden}.fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--c),var(--g))}.fill.dim{background:#5e6f8e}.fill.vio{background:linear-gradient(90deg,#8175ff,var(--v))}.call{margin-top:30px;padding:22px 26px;border:1px solid #365579;border-radius:18px;background:#0b1728}.call strong{font-size:34px}.table{display:grid;grid-template-columns:1.15fr 1fr 1fr;margin-top:28px;border:1px solid var(--e);border-radius:18px;overflow:hidden}.table div{padding:18px 20px;border-bottom:1px solid #21324d}.table div:nth-last-child(-n+3){border-bottom:0}.th{color:var(--c);font-weight:800;background:#101b2e}.num{font-size:26px;font-weight:850}.foot{position:absolute;left:78px;right:78px;bottom:30px;color:#7185a9;font-size:15px;display:flex;justify-content:space-between}.split{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:40px}.engine{border:1px solid var(--e);background:#0b1628;border-radius:24px;padding:30px}.engine h2{margin-top:0}.engine ul{font-size:21px;color:#d8e3f4;line-height:1.7}.note{color:var(--a);font-size:19px}.pill{display:inline-block;padding:7px 12px;border:1px solid #3c5476;border-radius:999px;color:#cce3f8;margin:10px 6px 0 0}.axis{position:relative;height:390px;margin-top:30px;border-left:2px solid #53647f;border-bottom:2px solid #53647f}.cliff{position:absolute;left:62.5%;top:0;bottom:0;width:2px;background:var(--r);box-shadow:0 0 18px var(--r)}.cliff:before{content:"163,840 prompt-token MTP cliff";position:absolute;right:10px;top:-28px;color:var(--r);white-space:nowrap}.pt{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--g);transform:translate(-50%,50%);box-shadow:0 0 13px #83f6c7aa}.pt.dead{background:var(--r);box-shadow:0 0 13px #ff6b85aa}#dock{position:absolute;left:0;right:0;bottom:0;height:66px;display:flex;align-items:center;justify-content:center;gap:8px;background:#08101ee8;border-top:1px solid #22324c;backdrop-filter:blur(12px);z-index:3}button,select,a.btn{font:inherit;color:#eaf2ff;background:#17243a;border:1px solid #384b6a;border-radius:8px;padding:9px 11px;text-decoration:none}button{cursor:pointer}.primary{background:linear-gradient(135deg,var(--c),var(--g));color:#05141a;border:0;font-weight:800}.clean #dock{display:none}.clean #deck{inset:0}.clean .slide{width:min(177.78vh,100vw);height:min(100vh,56.25vw)}@media(max-width:900px){#dock .optional{display:none}h1{font-size:48px}.big{font-size:78px}.slide{padding:50px 54px}}
-</style></head><body><main id="deck">
-<section class="slide" data-scene="overview"><div class="k">CURRENT ONE-SPARK ENVELOPE · SEP 13–14</div><h1>Qwen3.8-Flash-Next EXL3</h1><p>The benchmark page is now current-first. No stale Sep 7/8 headline scenes.</p><div class="hero"><div><span class="big g">58.8</span><span class="unit">tok/s</span><p>Direct ExLlamaV3 · single stream</p></div><div><span class="big c">157.6</span><span class="unit">tok/s</span><p>vLLM + vllm-exl3 · 8-stream steady aggregate</p></div></div><div class="grid"><div class="card"><small>CONFIGURED CONTEXT</small><b class="v">262,144</b><small>full model ceiling</small></div><div class="card"><small>vLLM SINGLE STREAM</small><b class="c">50–55 tok/s</b><small>MTP k=3 below prompt cliff</small></div><div class="card"><small>DEFAULT KV POOL</small><b class="g">416,163</b><small>tokens · 1.6× max-context request</small></div><div class="card"><small>MODEL RESIDENT</small><b class="a">~79 GiB</b><small>30.4 GiB packed n-gram included</small></div><div class="card"><small>COLD PREFILL</small><b class="c">~1,100 tok/s</b><small>flat from 3K to 252K prompts</small></div><div class="card"><small>196K CACHED TTFT</small><b class="g">1.56 s</b><small>vs 178.72 s cold</small></div></div><div class="foot"><span>ONE NVIDIA DGX SPARK · 3.05 bpw</span><span>1 / 7</span></div></section>
-<section class="slide" data-scene="speed"><div class="k">SINGLE-STREAM SPEED</div><h1>MTP k=3 is the current vLLM winner</h1><p>The fixed/current build reverses the old k=2 recommendation.</p><div class="cols"><div><h2>4K prompt</h2><div class="bar"><div class="label"><span>No draft</span><b>27.77</b></div><div class="track"><div class="fill dim" style="width:46%"></div></div></div><div class="bar"><div class="label"><span>MTP k=2</span><b>47.39</b></div><div class="track"><div class="fill" style="width:79%"></div></div></div><div class="bar"><div class="label"><span>MTP k=3</span><b class="g">50.09</b></div><div class="track"><div class="fill vio" style="width:83.5%"></div></div></div></div><div><h2>32K prompt</h2><div class="bar"><div class="label"><span>No draft</span><b>27.58</b></div><div class="track"><div class="fill dim" style="width:46%"></div></div></div><div class="bar"><div class="label"><span>MTP k=2</span><b>46.60</b></div><div class="track"><div class="fill" style="width:77.7%"></div></div></div><div class="bar"><div class="label"><span>MTP k=3</span><b class="v">49.73</b></div><div class="track"><div class="fill vio" style="width:82.9%"></div></div></div></div></div><div class="call"><strong class="g">58.8 tok/s</strong> <span style="font-size:27px">direct ExLlamaV3 1.5.0</span><p>Fastest measured single-user path. vLLM stays close while adding the full serving stack.</p></div><div class="foot"><span>DECODE EXCLUDES TTFT</span><span>2 / 7</span></div></section>
-<section class="slide" data-scene="context"><div class="k">CONTEXT ENVELOPE</div><h1>Fast through long prompts, then one sharp MTP boundary</h1><p><b>163,840 is a prompt-token MTP cliff, not the model context limit.</b> Configured context remains 262,144.</p><div class="axis"><div class="cliff"></div><span class="pt" style="left:1.2%;bottom:86%"></span><span class="pt" style="left:9.3%;bottom:82%"></span><span class="pt" style="left:37.1%;bottom:76%"></span><span class="pt" style="left:56.7%;bottom:83%"></span><span class="pt" style="left:62.4%;bottom:88%"></span><span class="pt dead" style="left:62.6%;bottom:15%"></span><span class="pt dead" style="left:79.3%;bottom:15%"></span><span class="pt dead" style="left:96.3%;bottom:13%"></span></div><div class="grid"><div class="card"><small>FASTEST MEASURED</small><b class="g">53.14 tok/s</b><small>at 163,506 prompt tokens</small></div><div class="card"><small>JUST ABOVE CLIFF</small><b class="r">21.99 tok/s</b><small>draft acceptance → 0</small></div><div class="card"><small>NO DRAFT LONG CONTEXT</small><b class="a">26.59 tok/s</b><small>~21% faster than dead speculation</small></div></div><div class="foot"><span>USE MTP k=3 BELOW THE CLIFF · TURN IT OFF ABOVE</span><span>3 / 7</span></div></section>
-<section class="slide" data-scene="scale"><div class="k">CONCURRENCY</div><h1>The earlier two-stream “plateau” was the metric, not the engine</h1><p>Steady-state decode shows vLLM batching correctly.</p><div class="table"><div class="th">STREAMS</div><div class="th">MTP k=3 · SHORT</div><div class="th">NO DRAFT · SHORT</div><div class="num">1</div><div class="num c">54.8</div><div class="num">29.0</div><div class="num">2</div><div class="num c">89.4</div><div class="num">49.1</div><div class="num">4</div><div class="num g">155.6</div><div class="num">87.2</div><div class="num">8</div><div class="num g">157.6</div><div class="num">153.4</div></div><div class="call"><strong>3K-token prompts:</strong> <span class="c">53.2 → 79.6 → 102.9 → 90.5 tok/s</span> across 1/2/4/8 streams.<p>The practical MTP sweet spot is ~156 tok/s on short prompts or ~103 tok/s at four 3K-prompt streams.</p></div><div class="foot"><span>STEADY AGGREGATE ONLY · UNIQUE PREFIX PER STREAM</span><span>4 / 7</span></div></section>
-<section class="slide" data-scene="cache"><div class="k">PREFIX CACHE</div><h1>A 196K-token document does not have to cost ~3 minutes every turn</h1><p>Cold prefill is the first-turn cost when the document/system prefix is reusable.</p><div class="grid" style="margin-top:75px"><div class="card"><small>COLD · NOVEL PREFIX</small><b class="r">178.72 s</b><small>0.0% cached</small></div><div class="card"><small>SAME DOC · NEW QUESTION</small><b class="c">2.33 s</b><small>98.9% cached</small></div><div class="card"><small>IDENTICAL REPEAT</small><b class="g">1.56 s</b><small>99.3% cached</small></div></div><div class="call" style="margin-top:70px;text-align:center"><strong class="g" style="font-size:54px">178.72s → 2.33s → 1.56s</strong><p>Warm requests skip cached work. Do not divide the full prompt length by warm TTFT and call it “prefill tok/s.”</p></div><div class="foot"><span>vLLM PREFIX-CACHE COUNTERS VERIFIED THE HITS</span><span>5 / 7</span></div></section>
-<section class="slide" data-scene="revision"><div class="k">4.05 BPW REVISION</div><h1>Full 262K on one Spark by keeping the packed n-gram table on NVMe</h1><p>Higher precision no longer forces a 131K ceiling. The trade is some decode speed for much more memory headroom.</p><div class="table"><div class="th">MEASURE</div><div class="th">TABLE RESIDENT</div><div class="th">N-GRAM ON NVMe</div><div>Max context</div><div class="num">131,072</div><div class="num g">262,144</div><div>KV pool</div><div class="num">195,509</div><div class="num g">954,453</div><div>MemAvailable</div><div class="num">3.4 GiB</div><div class="num g">18–20 GiB</div><div>Decode @ 4K</div><div class="num">48.70</div><div class="num c">41.1 tok/s</div><div>Decode @ 32K</div><div class="num">51.31</div><div class="num c">47.9 tok/s</div></div><div class="call"><strong>What changed:</strong> vllm-exl3 can keep the packed table file-backed and gather only the needed rows. <span class="note">PIECEWISE-only graphs + first-touch page-ins cost speed, but unlock capacity.</span></div><div class="foot"><span>4.05bpw_h6_ng6 · NGRAM_TABLE=disk</span><span>6 / 7</span></div></section>
-<section class="slide" data-scene="engines"><div class="k">ENGINE CHOICE</div><h1>Same EXL3 weights, two useful serving paths</h1><p>Use the engine that matches the workload instead of pretending there is one universal winner.</p><div class="split"><div class="engine"><h2 class="g">58.8 tok/s</h2><h2>Direct ExLlamaV3 1.5.0</h2><ul><li>fastest measured single-user path</li><li>lean native generator</li><li>more memory headroom</li><li>8-stream aggregate: <b>152.0 tok/s</b></li></ul><p class="note">For OpenAI-style API serving, add TabbyAPI or another serving layer.</p></div><div class="engine"><h2 class="c">157.6 tok/s</h2><h2>vLLM + vllm-exl3</h2><ul><li>OpenAI-compatible API out of the box</li><li>reasoning + tool-call parsers</li><li>structured output</li><li>prefix caching + batching</li><li>broader vLLM tooling / TP path</li></ul><p class="c">Same-sweep single stream: 54.8 tok/s</p></div></div><div class="call" style="text-align:center"><strong>NATIVE FOR LEAN SPEED · vLLM-EXL3 FOR FULL SERVING</strong></div><div class="foot"><span>Qwen3.8-Flash-Next EXL3 · ONE DGX SPARK</span><span>7 / 7</span></div></section>
-</main><nav id="dock"><select id="sel"><option value="overview">01 Overview</option><option value="speed">02 Speed</option><option value="context">03 Context</option><option value="scale">04 Concurrency</option><option value="cache">05 Prefix cache</option><option value="revision">06 4.05 bpw</option><option value="engines">07 Engines</option></select><button id="play" class="primary">Play tour</button><button id="prev">◀</button><button id="next">▶</button><button id="full">Fullscreen</button><button id="hide">Hide</button><a class="btn optional" href="benchmark-data.json">Data</a><a class="btn optional" href="https://github.com/vcruz305/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe">GitHub</a></nav><script>
-const scenes=[...document.querySelectorAll('.slide')],names=scenes.map(x=>x.dataset.scene),sel=document.getElementById('sel');let i=0,t=null;function show(n){i=(n+scenes.length)%scenes.length;scenes.forEach((s,j)=>s.classList.toggle('active',j===i));sel.value=names[i];try{history.replaceState(null,'',location.pathname+'?scene='+names[i]+(document.body.classList.contains('clean')?'&clean=1':''))}catch{}}function stop(){if(t){clearInterval(t);t=null;play.textContent='Play tour'}}function go(){stop();play.textContent='Stop';t=setInterval(()=>show(i+1),4500)}sel.onchange=()=>{stop();show(names.indexOf(sel.value))};prev.onclick=()=>{stop();show(i-1)};next.onclick=()=>{stop();show(i+1)};play.onclick=()=>t?stop():go();full.onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();hide.onclick=()=>document.body.classList.add('clean');addEventListener('keydown',e=>{if(e.key==='ArrowRight')show(i+1);if(e.key==='ArrowLeft')show(i-1);if(/^[1-7]$/.test(e.key))show(+e.key-1);if(e.key.toLowerCase()==='h')document.body.classList.toggle('clean');if(e.key.toLowerCase()==='f')full.click()});const q=new URLSearchParams(location.search),s=q.get('scene');if(names.includes(s))i=names.indexOf(s);if(q.get('clean')==='1')document.body.classList.add('clean');show(i);if(q.get('autoplay')==='1')go();window.benchmarkStudio={render:n=>show(n),clean:v=>document.body.classList.toggle('clean',v),scenes:names};
-</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Qwen3.8-Flash-Next EXL3 | One DGX Spark</title>
+<meta name="description" content="Current Qwen3.8-Flash-Next EXL3 serving envelope on one NVIDIA DGX Spark: 58.8 tok/s native, 157.6 tok/s vLLM aggregate, full 262K context.">
+<meta name="theme-color" content="#040712">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Qwen3.8-Flash-Next EXL3 on one DGX Spark">
+<meta property="og:description" content="58.8 tok/s native ExLlamaV3. 157.6 tok/s aggregate through vLLM. Full 262K context on one DGX Spark.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:creator" content="@ViC305">
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#03050b;--panel:#081326;--panel2:#0c1930;--edge:#294365;
+  --text:#f5f8ff;--muted:#9eb0cf;--cyan:#45e6ff;--mint:#7cf5c8;
+  --violet:#a784ff;--gold:#ffd166;--red:#ff6884;--nav-h:76px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#02040a;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
+body{overscroll-behavior:none;background:radial-gradient(circle at 15% 5%,#102c5b 0,#07101f 28%,#02040a 68%)}
+button,select,a{font:inherit}
+button,select{color:var(--text);background:#111f35;border:1px solid #355170;border-radius:11px}
+button{cursor:pointer}
+button:hover,select:hover{border-color:#6fe7ee}
+button:focus-visible,select:focus-visible{outline:3px solid var(--mint);outline-offset:2px}
+#app{position:fixed;inset:0;overflow:hidden}
+#viewport{position:absolute;inset:0 0 var(--nav-h);display:grid;place-items:center;overflow:hidden;padding:14px}
+#stage{
+  width:1920px;height:1080px;position:relative;overflow:hidden;flex:none;
+  transform-origin:center center;border-radius:24px;background:#060b16;
+  box-shadow:0 30px 110px #000c,0 0 0 1px #294363;
+  will-change:transform;
+}
+.slide{
+  display:none;position:absolute;inset:0;width:1920px;height:1080px;padding:72px 92px 66px;
+  background:
+    radial-gradient(circle at 85% 15%,#173e6c88 0,transparent 29%),
+    radial-gradient(circle at 82% 88%,#38226f55 0,transparent 32%),
+    linear-gradient(145deg,#081325 0,#050a14 52%,#03060e 100%);
+  overflow:hidden;
+}
+.slide.active{display:block;animation:sceneIn .32s ease-out both}
+.slide:before{content:"";position:absolute;inset:-2px;pointer-events:none;background:linear-gradient(90deg,#42e7ff0a,transparent 30%,transparent 70%,#a784ff0a)}
+.slide:after{content:"";position:absolute;left:92px;right:92px;top:54px;height:2px;background:linear-gradient(90deg,var(--cyan),#2c6d9e55,transparent 72%);opacity:.8}
+@keyframes sceneIn{from{opacity:.15;transform:translateX(22px)}to{opacity:1;transform:none}}
+.eyebrow{position:relative;z-index:1;color:var(--cyan);font-size:20px;letter-spacing:.18em;text-transform:uppercase;font-weight:850;margin-bottom:12px}
+h1,h2,p{position:relative;z-index:1}
+h1{font-size:70px;line-height:1.02;letter-spacing:-2.8px;margin:0 0 12px;font-weight:900}
+h2{font-size:38px;line-height:1.08;margin:0 0 14px;letter-spacing:-1px}
+p{font-size:23px;line-height:1.42;color:var(--muted);margin:8px 0}
+strong{color:#fff}.cyan{color:var(--cyan)}.mint{color:var(--mint)}.violet{color:var(--violet)}.gold{color:var(--gold)}.red{color:var(--red)}
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:44px;margin-top:64px;position:relative;z-index:1}
+.heroBox{background:linear-gradient(145deg,#0a1c34dd,#071225dd);border:1px solid #315376;border-radius:28px;padding:34px 38px;box-shadow:inset 0 1px #ffffff0a}
+.heroNum{font-size:118px;line-height:.9;font-weight:950;letter-spacing:-6px;text-shadow:0 0 28px currentColor}
+.heroUnit{font-size:30px;font-weight:800;color:#d8e6f9;margin-left:8px}
+.heroLabel{font-size:22px;color:#b8c8e2;margin-top:16px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:28px;position:relative;z-index:1}
+.card{min-height:146px;border-radius:21px;padding:21px 24px;background:linear-gradient(160deg,#0d1a30e8,#081323e8);border:1px solid #294664;box-shadow:inset 0 1px #ffffff0a}
+.card small{font-size:16px;color:#8ea4c7;letter-spacing:.08em;text-transform:uppercase;font-weight:750}.card b{display:block;font-size:40px;line-height:1.03;margin:10px 0 7px}.card span{font-size:17px;color:#9eb0cc}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-top:36px;position:relative;z-index:1}
+.panel{background:#09162a;border:1px solid #2b4565;border-radius:24px;padding:27px 30px}
+.barRow{margin:21px 0}.barLabel{display:flex;justify-content:space-between;align-items:baseline;font-size:21px;color:#c9d6e9;margin-bottom:8px}.barLabel b{font-size:26px}.track{height:25px;background:#132239;border-radius:999px;overflow:hidden}.fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--cyan),var(--mint));box-shadow:0 0 15px #45e6ff55}.fill.dim{background:#536784;box-shadow:none}.fill.violet{background:linear-gradient(90deg,#756eff,var(--violet));box-shadow:0 0 15px #9b85ff55}.fill.red{background:linear-gradient(90deg,#d94d68,var(--red));box-shadow:0 0 15px #ff688455}
+.callout{position:relative;z-index:1;margin-top:28px;background:linear-gradient(120deg,#0a1b31,#0a1528);border:1px solid #355779;border-radius:20px;padding:22px 27px}.callout b{font-size:34px}.callout p{font-size:19px;margin:5px 0 0}
+.table{display:grid;grid-template-columns:1.15fr 1fr 1fr;margin-top:28px;border:1px solid #2b4565;border-radius:20px;overflow:hidden;position:relative;z-index:1}.table>div{padding:17px 20px;border-bottom:1px solid #223a57;font-size:20px;background:#091529}.table>div:nth-last-child(-n+3){border-bottom:0}.table .th{background:#0e2039;color:var(--cyan);font-weight:850;letter-spacing:.04em}.table .num{font-size:26px;font-weight:850}
+.contextRail{position:relative;z-index:1;height:355px;margin:38px 18px 0;border-left:2px solid #536884;border-bottom:2px solid #536884}.contextRail:before{content:"decode tok/s";position:absolute;left:-62px;top:-27px;color:#768cac;font-size:16px}.cliff{position:absolute;left:62.5%;top:0;bottom:0;width:3px;background:var(--red);box-shadow:0 0 18px #ff6884aa}.cliff label{position:absolute;right:14px;top:-32px;white-space:nowrap;color:var(--red);font-size:18px;font-weight:800}.dot{position:absolute;width:18px;height:18px;border-radius:50%;transform:translate(-50%,50%);background:var(--mint);box-shadow:0 0 16px #7cf5c8cc}.dot.dead{background:var(--red);box-shadow:0 0 16px #ff6884cc}
+.engineGrid{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:36px;position:relative;z-index:1}.engine{border:1px solid #2d4c6e;border-radius:26px;padding:30px;background:linear-gradient(145deg,#0b1b31,#071325)}.engine .speed{font-size:72px;font-weight:950;letter-spacing:-3px;line-height:.95;margin:10px 0}.engine ul{font-size:20px;line-height:1.65;color:#d3def0;margin:17px 0 0;padding-left:25px}
+.pills{position:relative;z-index:1;margin-top:16px}.pill{display:inline-block;border:1px solid #345574;border-radius:999px;padding:7px 12px;color:#cfe0f5;margin:5px 5px 0 0;font-size:16px;background:#0c1a2c}
+.footer{position:absolute;z-index:1;left:92px;right:92px;bottom:30px;display:flex;justify-content:space-between;color:#6f85a7;font-size:16px;letter-spacing:.04em}
+#dock{position:absolute;left:0;right:0;bottom:0;height:var(--nav-h);display:flex;align-items:center;justify-content:center;gap:9px;padding:10px max(12px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));background:#06101dec;border-top:1px solid #223b59;backdrop-filter:blur(16px);z-index:20;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}#dock::-webkit-scrollbar{display:none}
+#dock button,#dock select,#dock a{flex:0 0 auto;padding:9px 12px;white-space:nowrap}.primary{background:linear-gradient(135deg,var(--cyan),var(--mint));color:#041319;border:0;font-weight:900}.sceneDots{display:flex;gap:7px;align-items:center;flex:0 0 auto}.sceneDots button{width:11px;height:11px;border-radius:50%;padding:0;border:0;background:#40506c}.sceneDots button.on{background:var(--mint);box-shadow:0 0 12px #7cf5c8aa}
+#portraitHint{display:none;position:absolute;z-index:30;left:12px;right:12px;top:max(12px,env(safe-area-inset-top));padding:12px 14px;border-radius:14px;border:1px solid #355775;background:#071326e8;backdrop-filter:blur(14px);box-shadow:0 10px 34px #0009;color:#c9d8ed;font-size:13px;align-items:center;justify-content:space-between;gap:12px}#portraitHint b{color:#fff}#portraitHint button{padding:7px 10px;font-size:12px}
+#toast{position:absolute;z-index:40;left:50%;top:16px;transform:translateX(-50%);padding:10px 16px;border-radius:10px;background:#10213a;border:1px solid #3c6283;color:#eef7ff;opacity:0;pointer-events:none;transition:opacity .18s}.showToast{opacity:1!important}
+#progress{position:absolute;z-index:19;left:0;right:0;bottom:var(--nav-h);height:3px;background:#0e1b2d}#progress>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--mint));transition:width .15s linear}
+.clean #dock,.clean #progress,.clean #portraitHint{display:none!important}.clean #viewport{inset:0;padding:0}.clean #stage{border-radius:0;box-shadow:none}
+@media(max-width:900px){:root{--nav-h:62px}#viewport{padding:6px}#dock{justify-content:flex-start;gap:6px}#dock button,#dock select,#dock a{padding:7px 9px;font-size:12px}.optional{display:none!important}.sceneDots{margin-left:auto}.sceneDots button{width:9px;height:9px}#stage{border-radius:12px}#portraitHint{display:flex}}
+@media(orientation:landscape) and (max-height:520px){#portraitHint{display:none}:root{--nav-h:54px}#dock button,#dock select,#dock a{padding:6px 8px}.sceneDots{margin-left:0}}
+@media(prefers-reduced-motion:reduce){.slide.active{animation:none}#progress>i,#toast{transition:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="portraitHint"><span><b>Best in landscape.</b> Rotate your phone, or tap Fullscreen for the full 16:9 benchmark deck.</span><button id="mobileFull">Fullscreen</button></div>
+  <div id="viewport"><div id="stage">
+    <section class="slide" data-scene="overview">
+      <div class="eyebrow">CURRENT ONE-SPARK ENVELOPE · SEP 13–14</div>
+      <h1>Qwen3.8-Flash-Next EXL3</h1>
+      <p>One DGX Spark. Full 262,144 configured context. Two serving paths, one current set of receipts.</p>
+      <div class="hero">
+        <div class="heroBox"><span class="heroNum mint">58.8</span><span class="heroUnit">tok/s</span><div class="heroLabel">Direct ExLlamaV3 · single stream</div></div>
+        <div class="heroBox"><span class="heroNum cyan">157.6</span><span class="heroUnit">tok/s</span><div class="heroLabel">vLLM + vllm-exl3 · 8-stream steady aggregate</div></div>
+      </div>
+      <div class="cards">
+        <div class="card"><small>Configured context</small><b class="violet">262,144</b><span>full model ceiling</span></div>
+        <div class="card"><small>vLLM single stream</small><b class="cyan">50–55 tok/s</b><span>MTP k=3 below prompt cliff</span></div>
+        <div class="card"><small>Default KV pool</small><b class="mint">416,163</b><span>tokens · 1.6× max-context request</span></div>
+        <div class="card"><small>Model resident</small><b class="gold">~79 GiB</b><span>30.4 GiB packed n-gram included</span></div>
+        <div class="card"><small>Cold prefill</small><b class="cyan">~1,100 tok/s</b><span>flat from 3K to 252K prompts</span></div>
+        <div class="card"><small>196K cached TTFT</small><b class="mint">1.56 s</b><span>vs 178.72 s cold</span></div>
+      </div>
+      <div class="footer"><span>ONE NVIDIA DGX SPARK · 3.05 BPW</span><span>1 / 7</span></div>
+    </section>
+
+    <section class="slide" data-scene="speed">
+      <div class="eyebrow">SINGLE-STREAM SPEED</div>
+      <h1>MTP k=3 is the current vLLM winner</h1>
+      <p>The fixed/current build reverses the old k=2 recommendation. Direct ExLlamaV3 is still the fastest lean single-user path.</p>
+      <div class="two">
+        <div class="panel"><h2>4K prompt</h2>
+          <div class="barRow"><div class="barLabel"><span>No draft</span><b>27.77</b></div><div class="track"><div class="fill dim" style="width:46%"></div></div></div>
+          <div class="barRow"><div class="barLabel"><span>MTP k=2</span><b>47.39</b></div><div class="track"><div class="fill" style="width:79%"></div></div></div>
+          <div class="barRow"><div class="barLabel"><span>MTP k=3</span><b class="mint">50.09</b></div><div class="track"><div class="fill violet" style="width:83.5%"></div></div></div>
+        </div>
+        <div class="panel"><h2>32K prompt</h2>
+          <div class="barRow"><div class="barLabel"><span>No draft</span><b>27.58</b></div><div class="track"><div class="fill dim" style="width:46%"></div></div></div>
+          <div class="barRow"><div class="barLabel"><span>MTP k=2</span><b>46.60</b></div><div class="track"><div class="fill" style="width:77.7%"></div></div></div>
+          <div class="barRow"><div class="barLabel"><span>MTP k=3</span><b class="violet">49.73</b></div><div class="track"><div class="fill violet" style="width:82.9%"></div></div></div>
+        </div>
+      </div>
+      <div class="callout"><b class="mint">58.8 tok/s</b> <span style="font-size:27px">direct ExLlamaV3 1.5.0</span><p>Same 3.05 bpw pack. Native is the quickest single-user path; vLLM trades a little engine overhead for a complete serving stack.</p></div>
+      <div class="footer"><span>DECODE EXCLUDES TTFT</span><span>2 / 7</span></div>
+    </section>
+
+    <section class="slide" data-scene="context">
+      <div class="eyebrow">CONTEXT ENVELOPE</div>
+      <h1>262K context, with one sharp MTP prompt-length boundary</h1>
+      <p><strong>163,840 is a prompt-token MTP acceptance cliff, not the model context limit.</strong> Configured context stays 262,144.</p>
+      <div class="contextRail"><div class="cliff"><label>163,840 prompt-token MTP cliff</label></div>
+        <span class="dot" style="left:1.2%;bottom:86%"></span><span class="dot" style="left:9.3%;bottom:82%"></span><span class="dot" style="left:37.1%;bottom:76%"></span><span class="dot" style="left:56.7%;bottom:83%"></span><span class="dot" style="left:62.4%;bottom:88%"></span><span class="dot dead" style="left:62.6%;bottom:15%"></span><span class="dot dead" style="left:79.3%;bottom:15%"></span><span class="dot dead" style="left:96.3%;bottom:13%"></span>
+      </div>
+      <div class="cards">
+        <div class="card"><small>Fastest measured</small><b class="mint">53.14 tok/s</b><span>163,506 prompt tokens</span></div>
+        <div class="card"><small>Just above cliff</small><b class="red">21.99 tok/s</b><span>draft acceptance → 0</span></div>
+        <div class="card"><small>No draft long context</small><b class="gold">26.59 tok/s</b><span>~21% faster than dead speculation</span></div>
+      </div>
+      <div class="footer"><span>MTP k=3 BELOW THE CLIFF · TURN IT OFF ABOVE</span><span>3 / 7</span></div>
+    </section>
+
+    <section class="slide" data-scene="scale">
+      <div class="eyebrow">CONCURRENCY</div>
+      <h1>The old two-stream “plateau” was the metric, not the engine</h1>
+      <p>Steady-state decode shows vLLM batching correctly on one Spark.</p>
+      <div class="table">
+        <div class="th">STREAMS</div><div class="th">MTP k=3 · SHORT</div><div class="th">NO DRAFT · SHORT</div>
+        <div class="num">1</div><div class="num cyan">54.8</div><div class="num">29.0</div>
+        <div class="num">2</div><div class="num cyan">89.4</div><div class="num">49.1</div>
+        <div class="num">4</div><div class="num mint">155.6</div><div class="num">87.2</div>
+        <div class="num">8</div><div class="num mint">157.6</div><div class="num">153.4</div>
+      </div>
+      <div class="callout"><b>3K-token prompts:</b> <span class="cyan" style="font-size:27px;font-weight:850">53.2 → 79.6 → 102.9 → 90.5 tok/s</span><p>Practical MTP sweet spot: ~156 tok/s on short prompts, or ~103 tok/s at four 3K-prompt streams.</p></div>
+      <div class="footer"><span>STEADY AGGREGATE · UNIQUE PREFIX PER STREAM</span><span>4 / 7</span></div>
+    </section>
+
+    <section class="slide" data-scene="cache">
+      <div class="eyebrow">PREFIX CACHE</div>
+      <h1>196K tokens does not have to mean a ~3-minute wait every turn</h1>
+      <p>Cold prefill is the first-turn cost when the document or system prefix is reusable.</p>
+      <div class="cards" style="margin-top:80px">
+        <div class="card"><small>Cold · novel prefix</small><b class="red">178.72 s</b><span>0.0% cached</span></div>
+        <div class="card"><small>Same doc · new question</small><b class="cyan">2.33 s</b><span>98.9% cached</span></div>
+        <div class="card"><small>Identical repeat</small><b class="mint">1.56 s</b><span>99.3% cached</span></div>
+      </div>
+      <div class="callout" style="margin-top:76px;text-align:center;padding:35px"><b class="mint" style="font-size:58px">178.72s → 2.33s → 1.56s</b><p>Warm requests skip cached work. The uncached tail still runs at the normal prefill rate.</p></div>
+      <div class="footer"><span>vLLM PREFIX-CACHE COUNTERS VERIFIED THE HITS</span><span>5 / 7</span></div>
+    </section>
+
+    <section class="slide" data-scene="revision">
+      <div class="eyebrow">4.05 BPW REVISION</div>
+      <h1>Full 262K on one Spark by keeping the packed n-gram table on NVMe</h1>
+      <p>The higher-precision pack trades some decode speed for dramatically more headroom when its n-gram table stays disk-backed.</p>
+      <div class="table">
+        <div class="th">MEASURE</div><div class="th">TABLE RESIDENT</div><div class="th">N-GRAM ON NVMe</div>
+        <div>Max context</div><div class="num">131,072</div><div class="num mint">262,144</div>
+        <div>KV pool</div><div class="num">195,509</div><div class="num mint">954,453</div>
+        <div>MemAvailable</div><div class="num red">3.4 GiB</div><div class="num mint">18–20 GiB</div>
+        <div>Decode @ 4K</div><div class="num">48.70</div><div class="num cyan">41.1</div>
+        <div>Decode @ 32K</div><div class="num">51.31</div><div class="num cyan">47.9</div>
+      </div>
+      <div class="callout"><b class="mint">131K → 262K context</b><p>Disk mode uses PIECEWISE-only graphs plus host-side row gathers, so there is a measurable speed cost. In return, the 4.05 pack becomes a real full-context one-Spark configuration.</p></div>
+      <div class="footer"><span>4.05 BPW · 107.5 GB ON DISK</span><span>6 / 7</span></div>
+    </section>
+
+    <section class="slide" data-scene="engines">
+      <div class="eyebrow">ENGINE CHOICE</div>
+      <h1>ExLlamaV3 for lean speed. vllm-exl3 for the full server.</h1>
+      <p>Same EXL3 pack, different priorities. Both are useful.</p>
+      <div class="engineGrid">
+        <div class="engine"><h2>Direct ExLlamaV3 1.5.0</h2><div class="speed mint">58.8 tok/s</div><p>Fastest measured single-stream path on this Spark.</p><ul><li>Lean runtime</li><li>Loads in under a minute in the measured harness</li><li>More memory left free</li><li>Pair with an API layer such as TabbyAPI when you need server/API functionality</li></ul></div>
+        <div class="engine"><h2>vLLM + vllm-exl3</h2><div class="speed cyan">157.6 tok/s</div><p>8-stream steady aggregate on short prompts.</p><ul><li>OpenAI-compatible API out of the box</li><li>Reasoning + tool-call parsers</li><li>Structured output</li><li>Prefix caching + scheduler/batching</li><li>Broader vLLM tooling and future TP paths</li></ul></div>
+      </div>
+      <div class="pills"><span class="pill">ONE SPARK</span><span class="pill">EXL3 3.05 bpw</span><span class="pill">262K CONTEXT</span><span class="pill">MTP k=3</span><span class="pill">VISION PRESERVED</span></div>
+      <div class="footer"><span>CHOOSE THE ENGINE FOR THE WORKLOAD</span><span>7 / 7</span></div>
+    </section>
+  </div></div>
+
+  <div id="progress"><i></i></div>
+  <nav id="dock" aria-label="Benchmark controls">
+    <button id="prev" aria-label="Previous scene">←</button>
+    <select id="sceneSelect" aria-label="Scene">
+      <option value="0">01 Overview</option><option value="1">02 Speed</option><option value="2">03 Context</option><option value="3">04 Concurrency</option><option value="4">05 Prefix cache</option><option value="5">06 4.05 bpw</option><option value="6">07 Engines</option>
+    </select>
+    <button id="next" aria-label="Next scene">→</button>
+    <button id="play" class="primary">Play</button>
+    <button id="full">Fullscreen</button>
+    <button id="clean" class="optional">Clean</button>
+    <a class="optional" href="../" title="Recipe repository">Recipe</a>
+    <div class="sceneDots" id="sceneDots" aria-label="Scene position"></div>
+  </nav>
+  <div id="toast" role="status"></div>
+</div>
+<script>
+(()=>{
+  const W=1920,H=1080,names=['overview','speed','context','scale','cache','revision','engines'];
+  const aliases={sweep:'speed',long:'context',cliff:'context',native:'engines',mtp_sweep:'speed',acceptance_cliff:'context',scaling:'scale',revision_405:'revision'};
+  const slides=[...document.querySelectorAll('.slide')],stage=document.getElementById('stage'),viewport=document.getElementById('viewport');
+  const select=document.getElementById('sceneSelect'),dots=document.getElementById('sceneDots'),progress=document.querySelector('#progress i');
+  const playBtn=document.getElementById('play');let index=0,timer=null,playing=false,started=0,duration=5000;
+
+  names.forEach((n,i)=>{const b=document.createElement('button');b.type='button';b.setAttribute('aria-label',`Scene ${i+1}: ${n}`);b.onclick=()=>show(i,true);dots.appendChild(b)});
+  const dotBtns=[...dots.children];
+
+  function fit(){
+    const r=viewport.getBoundingClientRect();
+    const pad=window.innerWidth<=900?8:26;
+    const scale=Math.min((r.width-pad*2)/W,(r.height-pad*2)/H,1);
+    stage.style.transform=`scale(${Math.max(.08,scale)})`;
+  }
+  function sceneFromURL(){const q=new URLSearchParams(location.search);let s=q.get('scene')||'overview';s=aliases[s]||s;const i=names.indexOf(s);return i<0?0:i}
+  function setURL(){const u=new URL(location.href);u.searchParams.set('scene',names[index]);history.replaceState(null,'',u)}
+  function show(i,push=false){
+    index=(i+slides.length)%slides.length;slides.forEach((s,j)=>s.classList.toggle('active',j===index));select.value=String(index);dotBtns.forEach((d,j)=>d.classList.toggle('on',j===index));progress.style.width=`${((index+1)/slides.length)*100}%`;if(push)setURL();fit();
+  }
+  function stop(){playing=false;clearInterval(timer);timer=null;playBtn.textContent='Play'}
+  function play(){
+    if(playing){stop();return}playing=true;playBtn.textContent='Pause';started=Date.now();
+    timer=setInterval(()=>{show(index+1,true);started=Date.now()},duration);
+  }
+  function toast(t){const x=document.getElementById('toast');x.textContent=t;x.classList.add('showToast');setTimeout(()=>x.classList.remove('showToast'),1600)}
+  async function fullscreen(){
+    try{if(!document.fullscreenElement)await document.documentElement.requestFullscreen();else await document.exitFullscreen();
+      try{if(screen.orientation&&screen.orientation.lock&&innerWidth<innerHeight)await screen.orientation.lock('landscape')}catch(_){ }
+    }catch(_){toast('Fullscreen is controlled by your browser')}
+    setTimeout(fit,120);
+  }
+  function clean(on){document.body.classList.toggle('clean',on);setTimeout(fit,20)}
+
+  document.getElementById('prev').onclick=()=>{stop();show(index-1,true)};
+  document.getElementById('next').onclick=()=>{stop();show(index+1,true)};
+  select.onchange=()=>{stop();show(Number(select.value),true)};
+  playBtn.onclick=play;document.getElementById('full').onclick=fullscreen;document.getElementById('mobileFull').onclick=fullscreen;
+  document.getElementById('clean').onclick=()=>clean(!document.body.classList.contains('clean'));
+
+  let x0=0,y0=0,t0=0;
+  stage.addEventListener('touchstart',e=>{const t=e.changedTouches[0];x0=t.clientX;y0=t.clientY;t0=Date.now()},{passive:true});
+  stage.addEventListener('touchend',e=>{const t=e.changedTouches[0],dx=t.clientX-x0,dy=t.clientY-y0;if(Date.now()-t0<700&&Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.4){stop();show(index+(dx<0?1:-1),true)}},{passive:true});
+
+  addEventListener('resize',fit);addEventListener('orientationchange',()=>setTimeout(fit,200));document.addEventListener('fullscreenchange',()=>setTimeout(fit,80));
+  addEventListener('keydown',e=>{if(e.key==='ArrowRight'){stop();show(index+1,true)}else if(e.key==='ArrowLeft'){stop();show(index-1,true)}else if(e.key===' '){e.preventDefault();play()}else if(e.key.toLowerCase()==='f')fullscreen();else if(e.key.toLowerCase()==='h')clean(!document.body.classList.contains('clean'))});
+
+  const q=new URLSearchParams(location.search);if(q.get('clean')==='1')clean(true);show(sceneFromURL());if(q.get('autoplay')==='1')setTimeout(play,700);
+  window.benchmarkStudio={render:(i)=>{stop();clean(true);show(i)},clean,show,fit,names};
+})();
+</script>
+</body>
+</html>
