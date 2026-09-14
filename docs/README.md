@@ -1,10 +1,20 @@
 # Interactive Qwen benchmark
 
-Current, static 16:9 presentation of the measured **Qwen3.8-Flash-Next EXL3** serving envelope on **one NVIDIA DGX Spark**. It is not a live model demo and does not run inference in the browser.
+Current 16:9 presentation of the measured **Qwen3.8-Flash-Next EXL3** serving envelope on **one NVIDIA DGX Spark**. It is not a live model demo and does not run inference in the browser.
 
 ## View
 
 [Open the current benchmark](https://vcruz305.github.io/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/)
+
+The viewer now uses a fixed 1920x1080 presentation stage that scales as one unit, so the landscape composition no longer breaks or clips when the browser is narrow. Desktop and landscape-mobile views keep the same card layout.
+
+On phones:
+
+- portrait mode shows a small **Best in landscape** prompt instead of reflowing the benchmark into a broken vertical layout;
+- **Fullscreen** attempts to enter fullscreen and request landscape orientation where the browser supports it;
+- swipe left/right on the benchmark to change scenes;
+- the bottom controls become a compact horizontally scrollable strip;
+- all seven scenes remain the same 16:9 design used for desktop captures.
 
 The page was rebuilt on 2026-09-14 so the default scenes no longer lead with the superseded Sep 7/8 measurements. Historical data remains in the main repository README for provenance; this viewer intentionally leads with the current Sep 13/14 envelope.
 
@@ -27,7 +37,9 @@ Current headline results:
 - `?scene=revision` — 4.05 bpw resident vs NVMe n-gram-table mode
 - `?scene=engines` — direct ExLlamaV3 vs vLLM + vllm-exl3 serving tradeoff
 
-Add `&clean=1` for controls-free capture. `?autoplay=1` cycles through the seven current scenes. Keyboard: **1–7** selects scenes, arrows move between scenes, **F** toggles fullscreen, **H** hides or restores controls.
+Legacy scene names such as `sweep`, `long`, `cliff`, and `native` still map to their current replacements so old shared links do not break.
+
+Add `&clean=1` for a controls-free view. `?autoplay=1` cycles through the current scenes. Keyboard: arrow keys change scenes, **Space** plays/pauses, **F** toggles fullscreen, and **H** hides or restores controls.
 
 ## Engine framing
 
