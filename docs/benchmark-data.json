@@ -1,723 +1,195 @@
 {
- "model": "Qwen3.8-Flash-Next",
- "pack": "turboderp/Qwen3.8-Flash-Next-exl3",
- "pack_revision": "3.05bpw_h5_ng5",
- "measurement_date": "2026-09-07",
- "source_commit": "ed93c1505835f01c7b28f209d544171199ea5210",
- "source_url": "https://github.com/vcruz305/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/blob/ed93c1505835f01c7b28f209d544171199ea5210/README.md",
- "recipe_url": "https://github.com/vcruz305/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe",
- "hardware": "One NVIDIA DGX Spark GB10, 128 GB unified memory",
- "runtime": "vLLM 0.28.1rc1.dev324+ga56654d6d with vllm-exl3 (native pack integration on main, unreleased 0.4.0)",
- "model_resident_gib": 78.57,
- "ple_resident_gib": 30.4,
- "ple_bits": 5,
- "ple_nvme_offload": false,
- "sweep": {
-  "configured_context": 32768,
-  "max_num_seqs": 4,
-  "in_flight_requests": 1,
-  "gpu_memory_utilization": 0.8,
-  "rows": [
-   {
-    "k": 0,
-    "label": "No draft",
-    "runs": [
-     27.97,
-     27.56,
-     27.16,
-     27.35
-    ],
-    "ttft_s": 0.185,
-    "kv_tokens": 385570,
-    "tokens_per_step": null,
-    "mean": 27.509999999999998,
-    "minimum": 27.16,
-    "maximum": 27.97,
-    "n": 4
-   },
-   {
-    "k": 1,
-    "label": "MTP k=1",
-    "runs": [
-     36.37,
-     33.8,
-     35.26,
-     35.28
-    ],
-    "ttft_s": 0.199,
-    "kv_tokens": 275636,
-    "tokens_per_step": 1.855,
-    "mean": 35.177499999999995,
-    "minimum": 33.8,
-    "maximum": 36.37,
-    "n": 4
-   },
-   {
-    "k": 2,
-    "label": "MTP k=2",
-    "runs": [
-     37.3,
-     38.88,
-     41.34,
-     39.32
-    ],
-    "ttft_s": 0.201,
-    "kv_tokens": 235412,
-    "tokens_per_step": 2.535,
-    "mean": 39.21,
-    "minimum": 37.3,
-    "maximum": 41.34,
-    "n": 4
-   },
-   {
-    "k": 3,
-    "label": "MTP k=3",
-    "runs": [
-     37.91,
-     34.44,
-     36.73,
-     38.18,
-     35.08,
-     37.35,
-     35.22
-    ],
-    "ttft_s": 0.21,
-    "kv_tokens": 224694,
-    "tokens_per_step": 2.951,
-    "mean": 36.41571428571429,
-    "minimum": 34.44,
-    "maximum": 38.18,
-    "n": 7
-   }
-  ],
-  "mean_definition": "Arithmetic mean of all listed per-run decode rates. Calculated from the published, rounded run values. Not pooled throughput, not a paired speedup, and not a confidence interval."
- },
- "long_prompt": {
-  "configured_context": 262144,
-  "actual_prompt_tokens": 122902,
-  "max_num_seqs": 2,
-  "in_flight_requests": 1,
-  "gpu_memory_utilization": 0.8,
-  "requested_completion_tokens": 128,
-  "rows": [
-   {
-    "k": 0,
-    "decode_tok_s": 26.2,
-    "approximate_decode": false,
-    "ttft_s": 107.0,
-    "kv_tokens": 546503
-   },
-   {
-    "k": 2,
-    "decode_tok_s": 43,
-    "approximate_decode": true,
-    "ttft_s": 110.6,
-    "reported_generation_s": 2.94,
-    "kv_tokens": 402630,
-    "reported_acceptance_length_range": [
-     2.49,
-     2.65
-    ]
-   }
-  ],
-  "scope": "Separate long-prompt probe, not a complete k=0..3 sweep at 256K, and not a full 262144-token prefill. Retain the source rounded label about 43 tok/s rather than inventing extra precision."
- },
- "profiler": {
-  "configured_context": 32768,
-  "draft": false,
-  "decode_steps": 32,
-  "gpu_kernel_time_percent": {
-   "EXL3 dense GEMV/GEMM": 47,
-   "EXL3 fused MoE": 34,
-   "BF16 GEMM": 5,
-   "Linear attention": 2,
-   "Norms": 1,
-   "Other": 11
-  }
- },
- "caveats": [
-  "Two measurement dates are present. The 2026-09-07 sweep ran on the build that predated the fat-expert and dense-routing fixes; the 2026-09-13 envelope ran on vllm-exl3 0.4.2 and supersedes it for speed.",
-  "MTP k is the number of speculative draft tokens, not quantization bit width.",
-  "KV pool capacity is shared serving capacity, not validated per-request input length.",
-  "Bit-exact output equivalence is not established and cannot be tested by text diff on this engine: at temperature 0 with a fixed seed the same server returned four distinct outputs from five identical requests on an open-ended prompt.",
-  "Decode figures exclude time to first token.",
-  "Bit-exact full-output equivalence is not established. These are timing/probe results, not a quality evaluation.",
-  "No raw per-request JSON logs were present in the inspected recipe tree; listed README values are preserved."
- ],
- "envelope": {
-  "measurement_date": "2026-09-13",
-  "runtime": "vLLM 0.29.0 with exllamav3 1.4.7 and vllm-exl3 0.4.2",
-  "configured_context": 262144,
-  "max_num_seqs": 4,
-  "gpu_memory_utilization": 0.8,
-  "mamba_ssm_cache_dtype": "bfloat16",
-  "method": "Decode excludes TTFT. Median of four samples at short context, two at long. Every sample uses a unique prompt prefix so prefix caching cannot fake a cold prefill.",
-  "sweep": [
-   {
-    "k": 0,
-    "label": "No draft",
-    "decode_4k": 27.77,
-    "decode_32k": 27.58,
-    "kv_tokens": 512439,
-    "acceptance": null
-   },
-   {
-    "k": 2,
-    "label": "MTP k=2",
-    "decode_4k": 47.39,
-    "decode_32k": 46.6,
-    "kv_tokens": 411319,
-    "acceptance": [
-     0.829,
-     0.671
-    ]
-   },
-   {
-    "k": 3,
-    "label": "MTP k=3",
-    "decode_4k": 50.09,
-    "decode_32k": 49.73,
-    "kv_tokens": 385422,
-    "acceptance": [
-     0.863,
-     0.675,
-     0.571
-    ]
-   },
-   {
-    "k": 4,
-    "label": "MTP k=4",
-    "decode_4k": null,
-    "decode_32k": null,
-    "kv_tokens": null,
-    "acceptance": null,
-    "note": "engine wedges after torch.compile and never allocates KV"
-   }
-  ],
-  "ssm_bf16": {
-   "decode_4k": 52.22,
-   "decode_32k": 50.53,
-   "kv_tokens": 416163,
-   "verdict": "KV pool up about 8 percent. Any decode gain sits inside the sample spread and is not established."
+  "schema_version": 2,
+  "model": "Qwen3.8-Flash-Next",
+  "pack": "turboderp/Qwen3.8-Flash-Next-exl3",
+  "pack_revision": "3.05bpw_h5_ng5",
+  "updated": "2026-09-14",
+  "source_commit": "943d6625dec9c5067a412ae14a351733b0829a06",
+  "source_url": "https://github.com/vcruz305/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe/blob/943d6625dec9c5067a412ae14a351733b0829a06/README.md",
+  "recipe_url": "https://github.com/vcruz305/Qwen3.8-Flash-Next-EXL3-DGX-Spark-recipe",
+  "hardware": {
+    "name": "NVIDIA DGX Spark / GB10",
+    "unified_memory_gb": 128,
+    "visible_gib": 121.7
   },
-  "cliff": {
-   "bounds": [
-    163818,
-    164091
-   ],
-   "curve": [
-    {
-     "tokens": 3060,
-     "tokens_per_chunk": 3.03,
-     "decode_tok_s": 52.22
-    },
-    {
-     "tokens": 24354,
-     "tokens_per_chunk": 2.98,
-     "decode_tok_s": 50.53
-    },
-    {
-     "tokens": 97362,
-     "tokens_per_chunk": 2.88,
-     "decode_tok_s": 48.13
-    },
-    {
-     "tokens": 148569,
-     "tokens_per_chunk": 2.91,
-     "decode_tok_s": 50.72
-    },
-    {
-     "tokens": 156018,
-     "tokens_per_chunk": 2.91,
-     "decode_tok_s": 51.98
-    },
-    {
-     "tokens": 163428,
-     "tokens_per_chunk": 2.75,
-     "decode_tok_s": 48.71
-    },
-    {
-     "tokens": 163506,
-     "tokens_per_chunk": 2.86,
-     "decode_tok_s": 53.14
-    },
-    {
-     "tokens": 163818,
-     "tokens_per_chunk": 2.86,
-     "decode_tok_s": 51.76
-    },
-    {
-     "tokens": 164091,
-     "tokens_per_chunk": 1.0,
-     "decode_tok_s": 21.99
-    },
-    {
-     "tokens": 178287,
-     "tokens_per_chunk": 1.0,
-     "decode_tok_s": 21.95
-    },
-    {
-     "tokens": 208005,
-     "tokens_per_chunk": 1.0,
-     "decode_tok_s": 21.94
-    },
-    {
-     "tokens": 252582,
-     "tokens_per_chunk": 1.0,
-     "decode_tok_s": 21.3
-    }
-   ],
-   "baseline_no_draft": [
-    {
-     "tokens": 3060,
-     "decode_tok_s": 27.77
-    },
-    {
-     "tokens": 24354,
-     "decode_tok_s": 27.58
-    },
-    {
-     "tokens": 97362,
-     "decode_tok_s": 27.29
-    },
-    {
-     "tokens": 188661,
-     "decode_tok_s": 26.59
-    }
-   ],
-   "finding": "Draft acceptance collapses to exactly 0.000 at every position at 163,840 tokens (160 x 1024), pinned to within 273 tokens: healthy at 163,818 and dead at 164,091. Past the cliff the draft head keeps drafting and the target rejects all of it, so speculation costs about 21 percent against no draft. The mechanism is not identified; no hardcoded 163840 exists in the qwen4_exp or exl3 code path.",
-   "recommendation": "MTP k=3 below 163,840 tokens. SPEC_CONFIG=none at or above it.",
-   "boundary": 163840,
-   "pin": [
-    {
-     "tokens": 163506,
-     "tokens_per_chunk": 2.86,
-     "decode_tok_s": 53.14
-    },
-    {
-     "tokens": 163818,
-     "tokens_per_chunk": 2.86,
-     "decode_tok_s": 51.76
-    },
-    {
-     "tokens": 164091,
-     "tokens_per_chunk": 1.0,
-     "decode_tok_s": 21.99
-    }
-   ]
-  },
-  "sampling": {
-   "context": 4096,
-   "k": 3,
-   "samples_per_point": 3,
-   "rows": [
-    {
-     "temperature": 0.0,
-     "decode_tok_s": 51.38,
-     "acceptance": 0.68
-    },
-    {
-     "temperature": 0.3,
-     "decode_tok_s": 49.64,
-     "acceptance": 0.686
-    },
-    {
-     "temperature": 0.7,
-     "decode_tok_s": 51.04,
-     "acceptance": 0.667
-    },
-    {
-     "temperature": 1.0,
-     "decode_tok_s": 48.14,
-     "acceptance": 0.644
-    }
-   ],
-   "finding": "MTP speedup survives real sampling. Acceptance falls 68.0 to 64.4 percent from greedy to temperature 1.0, costing about 6 percent."
-  },
-  "concurrency": {
-   "measurement_date": "2026-09-14",
-   "context": 256,
-   "tokens_per_stream": 128,
-   "rounds": 2,
-   "max_num_seqs": 8,
-   "method": "Steady aggregate: total tokens over the span in which every stream is decoding. Window aggregate: first stream's first token to last stream's last token (charges other streams' chunked prefills to the first stream). Unique prompt prefix per stream, short prompts of about 190 tokens.",
-   "rows": [
-    {
-     "streams": 1,
-     "mtp_k3": 54.8,
-     "no_draft": 29.0,
-     "mtp_k3_window": 54.8,
-     "no_draft_window": 29.0
-    },
-    {
-     "streams": 2,
-     "mtp_k3": 89.4,
-     "no_draft": 49.1,
-     "mtp_k3_window": 83.5,
-     "no_draft_window": 48.2
-    },
-    {
-     "streams": 4,
-     "mtp_k3": 155.6,
-     "no_draft": 87.2,
-     "mtp_k3_window": 147.7,
-     "no_draft_window": 82.3
-    },
-    {
-     "streams": 8,
-     "mtp_k3": 157.6,
-     "no_draft": 153.4,
-     "mtp_k3_window": 146.9,
-     "no_draft_window": 135.5
-    }
-   ],
-   "long_prompts": {
-    "context": 4096,
-    "tokens_per_stream": 512,
-    "rounds": 1,
-    "rows": [
-     {
-      "streams": 1,
-      "mtp_k3": 53.2,
-      "no_draft": 28.7
-     },
-     {
-      "streams": 2,
-      "mtp_k3": 79.6,
-      "no_draft": 46.0
-     },
-     {
-      "streams": 4,
-      "mtp_k3": 102.9,
-      "no_draft": 63.0
-     },
-     {
-      "streams": 8,
-      "mtp_k3": 90.5,
-      "no_draft": 73.1
-     }
-    ]
-   },
-   "superseded": "The 2026-09-13 rows (54.3 / 77.9 / 71.8 / n/a with MTP, 28.9 / 45.8 / 44.0 / 43.0 without) used 3k prompts, 128 tokens per stream and the window aggregate alone, which measured chunked-prefill interleaving rather than decode.",
-   "profile": "1-stream vs 4-stream decode window, short prompts, 256 tokens: exl3_moe GPU time 1.66 s to 3.27 s, dense EXL3 flat (1.87 s to 1.83 s).",
-   "finding": "The engine scales: 156 tok/s aggregate at four streams and 158 at eight with MTP k=3 on short prompts, 153 without a draft at eight. Long contexts cost more per batched step (103 at four streams on 3k prompts). Sweet spot is MTP k=3 at four streams.",
-   "empty_levers": [
-    "max-num-seqs 2 vs 4: 52.84 vs 52.22 tok/s, inside noise, KV pool +2%",
-    "CUDA graph mode: already FULL_AND_PIECEWISE on every boot",
-    "max-num-batched-tokens 16384 vs 2048: +2% prefill",
-    "kv-cache-dtype fp8: refused, QSA requires BF16 main KV cache"
-   ]
-  },
-  "revision_405": {
-   "measurement_date": "2026-09-13",
-   "note": "Same build and harness as the envelope. 4.05 needs util 0.92 and 131,072 context to boot; a 262k attempt at 0.93 drove MemAvailable to 1 GiB and was killed by the watchdog before KV allocation.",
-   "rows": [
-    {
-     "metric": "model_resident_gib",
-     "p305": 79.0,
-     "p405": 100.81
-    },
-    {
-     "metric": "ngram_packed_gib",
-     "p305": 30.4,
-     "p405": 36.36
-    },
-    {
-     "metric": "gpu_memory_utilization",
-     "p305": 0.8,
-     "p405": 0.92
-    },
-    {
-     "metric": "max_context_that_boots",
-     "p305": 262144,
-     "p405": 131072
-    },
-    {
-     "metric": "kv_pool_tokens",
-     "p305": 416163,
-     "p405": 195509
-    },
-    {
-     "metric": "memavailable_gib",
-     "p305": 17.5,
-     "p405": 3.4
-    },
-    {
-     "metric": "decode_4k_mtp_k3",
-     "p305": 52.22,
-     "p405": 48.7
-    },
-    {
-     "metric": "decode_32k_mtp_k3",
-     "p305": 50.53,
-     "p405": 51.31
-    },
-    {
-     "metric": "prefill_24k",
-     "p305": 1142.3,
-     "p405": 1137.0
-    },
-    {
-     "metric": "acceptance",
-     "p305": 0.68,
-     "p405": 0.741
-    }
-   ],
-   "finding": "Speed unchanged within noise; acceptance up 68 to 74 percent; cost is 22 GiB more resident, util 0.92, half the context, 2 to 3 GiB free, and no 262k on one Spark. Superseded for memory on 2026-09-14: with NGRAM_TABLE=disk the revision boots at 262k, see disk_mode.",
-   "disk_mode": {
-    "measurement_date": "2026-09-14",
-    "runtime": "vLLM 0.29.0, exllamav3 1.4.7, vllm-exl3 main 94c29ba, VLLM_EXL3_NGRAM_TABLE=disk, cudagraph_mode PIECEWISE with vllm::exl3_ngram_lookup_out as a splitting op",
-    "rows": [
-     {
-      "metric": "max_context_that_boots",
-      "resident": 131072,
-      "disk": 262144
-     },
-     {
-      "metric": "gpu_memory_utilization",
-      "resident": 0.92,
-      "disk": 0.8
-     },
-     {
-      "metric": "kv_pool_tokens",
-      "resident": 195509,
-      "disk": 954453
-     },
-     {
-      "metric": "memavailable_gib",
-      "resident": 3.4,
-      "disk": 19.0
-     },
-     {
-      "metric": "decode_4k_mtp_k3",
-      "resident": 48.7,
-      "disk": 41.1
-     },
-     {
-      "metric": "decode_32k_mtp_k3",
-      "resident": 51.31,
-      "disk": 47.9
-     },
-     {
-      "metric": "decode_4k_no_draft",
-      "resident": null,
-      "disk": 24.4
-     },
-     {
-      "metric": "prefill_24k",
-      "resident": 1137.0,
-      "disk": 1128.0
-     }
-    ],
-    "piecewise_cost_on_305": {
-     "decode_4k_mtp_k3": 48.25,
-     "decode_32k_mtp_k3": 48.01,
-     "reference": [
-      52.22,
-      50.53
-     ]
-    },
-    "finding": "With the n-gram table on NVMe the 4.05 revision boots at 262k on one Spark with a 954k-token KV pool and 18 to 20 GiB free, about 10 percent slower than 3.05 at the same context: PIECEWISE-only graphs cost 5 to 7 percent and rows page in on first touch."
-   }
-  },
-  "native_exl3": {
-   "measurement_date": "2026-09-14",
-   "engine": "exllamav3 1.5.0 native generator (JIT extension built for sm_121), single job, in-process timing",
-   "method": "Same prompt builder and salts as qbench.py; greedy; 128 new tokens; decode is (new_tokens-1)/(time_last_token-time_first_token); median of four samples; 40,960-token cache; MTP draft via component=mtp with max_history=k.",
-   "rows": [
-    {
-     "pack": "3.05",
-     "k": 0,
-     "vllm_4k": 27.77,
-     "vllm_32k": 27.58,
-     "native_4k": 33.36,
-     "native_32k": 32.9
-    },
-    {
-     "pack": "3.05",
-     "k": 2,
-     "vllm_4k": 47.39,
-     "vllm_32k": 46.6,
-     "native_4k": 53.73,
-     "native_32k": 54.35
-    },
-    {
-     "pack": "3.05",
-     "k": 3,
-     "vllm_4k": 52.22,
-     "vllm_32k": 50.53,
-     "native_4k": 56.35,
-     "native_32k": 56.62
-    },
-    {
-     "pack": "4.05",
-     "k": 0,
-     "vllm_4k": null,
-     "vllm_32k": null,
-     "native_4k": 30.23,
-     "native_32k": 30.68
-    },
-    {
-     "pack": "4.05",
-     "k": 2,
-     "vllm_4k": null,
-     "vllm_32k": null,
-     "native_4k": 52.62,
-     "native_32k": 51.54
-    },
-    {
-     "pack": "4.05",
-     "k": 3,
-     "vllm_4k": 48.7,
-     "vllm_32k": 51.31,
-     "native_4k": 54.32,
-     "native_32k": 53.83
-    }
-   ],
-   "prefill_24k": {
-    "vllm_305": 1142.3,
-    "native_305": 1129.2,
-    "vllm_405": 1137.0,
-    "native_405": 1112.5
-   },
-   "ttft_3k_s": {
-    "vllm_305": 2.8,
-    "native_305": 5.1,
-    "note": "native streams the n-gram table from NVMe (trellis_disk) and pays about 1.8 s more on a cold short prompt"
-   },
-   "memavailable_gib": {
-    "vllm_305": 17.5,
-    "native_305": 62.7,
-    "vllm_405": 3.4,
-    "native_405": 47.8
-   },
-   "acceptance_k3_305": {
-    "vllm_per_position": [
-     0.863,
-     0.675,
-     0.571
-    ],
-    "native_per_position": [
-     0.875,
-     0.731,
-     0.617
-    ],
-    "native_mean_accepted_per_round": 2.22,
-    "vllm_mean_accepted_per_round": 2.11
-   },
-   "finding": "Native decode is 8 to 20 percent faster on the same pack: the largest gap is without a draft (30 ms against 36 ms per step), narrowing under MTP. Prefill is the same engine speed at 24k. 4.05 is again no faster than 3.05. Native leaves 45 to 60 GiB free because the n-gram table stays on disk.",
-   "plugin_on_150": {
-    "measurement_date": "2026-09-14",
-    "runtime": "vLLM 0.29.0 + vllm-exl3 0.4.2 with the exllamav3 1.5.0 extension substituted (exl3_moe call padded to the 1.5.0 arity), envelope config",
-    "rows": [
-     {
-      "k": 3,
-      "decode_4k": 52.05,
-      "decode_32k": 49.57,
-      "prefill_24k": 1138.5,
-      "acceptance": [
-       0.867,
-       0.69,
-       0.542
-      ]
-     },
-     {
-      "k": 0,
-      "decode_4k": 28.54,
-      "decode_32k": 28.23,
-      "prefill_24k": 1178.0,
-      "acceptance": null
-     }
-    ],
-    "finding": "Kernel version is not the lever: k=3 unchanged (52.05 vs 52.22), no-draft about 3 percent up at the edge of the spread. The native gap is engine step cost (hidden by MTP) and draft acceptance at positions 2 and 3."
-   },
-   "concurrency": {
-    "measurement_date": "2026-09-14",
-    "context": 4096,
-    "tokens_per_stream": 128,
-    "rounds": 2,
-    "method": "N jobs enqueued together on exllamav3's dynamic generator, unique prompt prefix per stream. Aggregate is total new tokens over the window from the first stream's first token to the last stream's last token; per-stream is that stream's own decode rate. Median of two rounds.",
-    "rows": [
-     {
-      "streams": 1,
-      "native_k3": 56.41,
-      "native_no_draft": 32.79,
-      "vllm_k3": 54.3,
-      "vllm_no_draft": 28.9,
-      "native_per_stream_k3": 55.97,
-      "native_per_stream_no_draft": 32.53,
-      "vllm_k3_steady_long": 53.2,
-      "vllm_no_draft_steady_long": 28.7
-     },
-     {
-      "streams": 2,
-      "native_k3": 83.12,
-      "native_no_draft": 48.24,
-      "vllm_k3": 77.9,
-      "vllm_no_draft": 45.8,
-      "native_per_stream_k3": 41.84,
-      "native_per_stream_no_draft": 23.93,
-      "vllm_k3_steady_long": 79.6,
-      "vllm_no_draft_steady_long": 46.0
-     },
-     {
-      "streams": 4,
-      "native_k3": 96.56,
-      "native_no_draft": 84.91,
-      "vllm_k3": 71.8,
-      "vllm_no_draft": 44.0,
-      "native_per_stream_k3": 24.19,
-      "native_per_stream_no_draft": 21.06,
-      "vllm_k3_steady_long": 102.9,
-      "vllm_no_draft_steady_long": 63.0
-     },
-     {
-      "streams": 8,
-      "native_k3": 135.81,
-      "native_no_draft": 111.69,
-      "vllm_k3": null,
-      "vllm_no_draft": 43.0,
-      "native_per_stream_k3": 17.0,
-      "native_per_stream_no_draft": 13.85,
-      "vllm_k3_steady_long": 90.5,
-      "vllm_no_draft_steady_long": 73.1
-     }
-    ],
-    "finding": "Parity on short prompts (both engines reach 150 to 158 tok/s at eight streams; vLLM ahead at four with MTP). On 3k-token prompts exllamav3 is ahead at eight streams (135.8 against vLLM's steady 90.5). The earlier vLLM window numbers understated it.",
-    "short_prompts": {
-     "context": 256,
-     "rows": [
+  "current": {
+    "configured_context": 262144,
+    "vllm_runtime": "vLLM 0.29.0 + vllm-exl3 0.4.2; disk-backed n-gram mode requires vllm-exl3 main 94c29ba or newer",
+    "model_resident_gib": 79.0,
+    "ngram_resident_gib": 30.4,
+    "kv_pool_tokens": 416163,
+    "max_context_concurrency": 1.6,
+    "mem_available_gib": "17–18",
+    "draft_depth": [
       {
-       "streams": 1,
-       "native_k3": 58.8,
-       "native_no_draft": 31.3,
-       "vllm_k3_steady": 54.8,
-       "vllm_no_draft_steady": 29.0
+        "label": "No draft",
+        "k": 0,
+        "decode_4k": 27.77,
+        "decode_32k": 27.58
       },
       {
-       "streams": 2,
-       "native_k3": 87.8,
-       "native_no_draft": 54.4,
-       "vllm_k3_steady": 89.4,
-       "vllm_no_draft_steady": 49.1
+        "label": "MTP k=2",
+        "k": 2,
+        "decode_4k": 47.39,
+        "decode_32k": 46.6
       },
       {
-       "streams": 4,
-       "native_k3": 104.4,
-       "native_no_draft": 94.8,
-       "vllm_k3_steady": 155.6,
-       "vllm_no_draft_steady": 87.2
-      },
-      {
-       "streams": 8,
-       "native_k3": 152.0,
-       "native_no_draft": 144.0,
-       "vllm_k3_steady": 157.6,
-       "vllm_no_draft_steady": 153.4
+        "label": "MTP k=3",
+        "k": 3,
+        "decode_4k": 50.09,
+        "decode_32k": 49.73
       }
-     ]
+    ],
+    "context_curve": [
+      {
+        "prompt_tokens": 3060,
+        "decode_tok_s": 52.22,
+        "tokens_per_chunk": 3.03
+      },
+      {
+        "prompt_tokens": 24354,
+        "decode_tok_s": 50.53,
+        "tokens_per_chunk": 2.98
+      },
+      {
+        "prompt_tokens": 97362,
+        "decode_tok_s": 48.13,
+        "tokens_per_chunk": 2.88
+      },
+      {
+        "prompt_tokens": 148569,
+        "decode_tok_s": 50.72,
+        "tokens_per_chunk": 2.91
+      },
+      {
+        "prompt_tokens": 156018,
+        "decode_tok_s": 51.98,
+        "tokens_per_chunk": 2.91
+      },
+      {
+        "prompt_tokens": 163506,
+        "decode_tok_s": 53.14,
+        "tokens_per_chunk": 2.86
+      },
+      {
+        "prompt_tokens": 163818,
+        "decode_tok_s": 51.76,
+        "tokens_per_chunk": 2.86
+      },
+      {
+        "prompt_tokens": 164091,
+        "decode_tok_s": 21.99,
+        "tokens_per_chunk": 1.0
+      },
+      {
+        "prompt_tokens": 178287,
+        "decode_tok_s": 21.95,
+        "tokens_per_chunk": 1.0
+      },
+      {
+        "prompt_tokens": 208005,
+        "decode_tok_s": 21.94,
+        "tokens_per_chunk": 1.0
+      },
+      {
+        "prompt_tokens": 252582,
+        "decode_tok_s": 21.3,
+        "tokens_per_chunk": 1.0
+      }
+    ],
+    "mtp_cliff_prompt_tokens": 163840,
+    "no_draft_long_context_tok_s": 26.59,
+    "cold_prefill_tok_s": "1,075–1,180",
+    "prefix_cache": {
+      "prompt_tokens": 196010,
+      "cold_ttft_s": 178.72,
+      "same_doc_new_question_ttft_s": 2.33,
+      "same_doc_new_question_cached_pct": 98.9,
+      "identical_repeat_ttft_s": 1.56,
+      "identical_repeat_cached_pct": 99.3
+    },
+    "concurrency_short": [
+      {
+        "streams": 1,
+        "mtp_k3_steady": 54.8,
+        "no_draft_steady": 29.0
+      },
+      {
+        "streams": 2,
+        "mtp_k3_steady": 89.4,
+        "no_draft_steady": 49.1
+      },
+      {
+        "streams": 4,
+        "mtp_k3_steady": 155.6,
+        "no_draft_steady": 87.2
+      },
+      {
+        "streams": 8,
+        "mtp_k3_steady": 157.6,
+        "no_draft_steady": 153.4
+      }
+    ],
+    "concurrency_3k": [
+      {
+        "streams": 1,
+        "mtp_k3_steady": 53.2,
+        "no_draft_steady": 28.7
+      },
+      {
+        "streams": 2,
+        "mtp_k3_steady": 79.6,
+        "no_draft_steady": 46.0
+      },
+      {
+        "streams": 4,
+        "mtp_k3_steady": 102.9,
+        "no_draft_steady": 63.0
+      },
+      {
+        "streams": 8,
+        "mtp_k3_steady": 90.5,
+        "no_draft_steady": 73.1
+      }
+    ],
+    "native_exllamav3": {
+      "version": "1.5.0",
+      "single_stream_k3_tok_s": 58.8,
+      "eight_stream_aggregate_tok_s": 152.0,
+      "vllm_single_stream_same_sweep_tok_s": 54.8,
+      "vllm_eight_stream_same_sweep_tok_s": 157.6,
+      "note": "Native ExLlamaV3 is the leaner/faster single-user path. vLLM + vllm-exl3 provides OpenAI-compatible serving, parsers, structured output, prefix caching and broader vLLM tooling out of the box."
+    },
+    "revision_405": {
+      "pack_revision": "4.05bpw_h6_ng6",
+      "disk_gb": 107.5,
+      "resident": {
+        "max_context": 131072,
+        "gpu_util": 0.92,
+        "kv_pool_tokens": 195509,
+        "mem_available_gib": 3.4,
+        "decode_4k": 48.7,
+        "decode_32k": 51.31,
+        "prefill_24k": 1137
+      },
+      "disk_ngram": {
+        "max_context": 262144,
+        "gpu_util": 0.8,
+        "kv_pool_tokens": 954453,
+        "context_concurrency": 3.64,
+        "mem_available_gib": "18–20",
+        "decode_4k": 41.1,
+        "decode_32k": 47.9,
+        "no_draft_4k": 24.4,
+        "prefill_24k": 1128
+      },
+      "note": "Keeping the packed n-gram table on NVMe makes the higher-precision revision a real 262K one-Spark configuration, at a decode cost from PIECEWISE-only graphs plus first-touch page-ins."
     }
-   }
+  },
+  "methodology": {
+    "decode": "Completion tokens after the first token divided by decode wall time; TTFT excluded.",
+    "cold_prefill": "Unique prefix per request; verified with vLLM prefix-cache hit counters.",
+    "concurrency": "Steady aggregate counts tokens only over the interval where every stream is decoding.",
+    "scope": "Recorded measurements only. No browser-side inference. Historical Sep 7/8 results remain in the repository README, but this benchmark page intentionally presents the current Sep 13/14 serving envelope only."
   }
- }
 }
