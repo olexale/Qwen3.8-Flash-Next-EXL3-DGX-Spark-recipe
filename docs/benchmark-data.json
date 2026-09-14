@@ -435,6 +435,118 @@
     }
    ],
    "finding": "Speed unchanged within noise; acceptance up 68 to 74 percent; cost is 22 GiB more resident, util 0.92, half the context, 2 to 3 GiB free, and no 262k on one Spark."
+  },
+  "native_exl3": {
+   "measurement_date": "2026-09-14",
+   "engine": "exllamav3 1.5.0 native generator (JIT extension built for sm_121), single job, in-process timing",
+   "method": "Same prompt builder and salts as qbench.py; greedy; 128 new tokens; decode is (new_tokens-1)/(time_last_token-time_first_token); median of four samples; 40,960-token cache; MTP draft via component=mtp with max_history=k.",
+   "rows": [
+    {
+     "pack": "3.05",
+     "k": 0,
+     "vllm_4k": 27.77,
+     "vllm_32k": 27.58,
+     "native_4k": 33.36,
+     "native_32k": 32.9
+    },
+    {
+     "pack": "3.05",
+     "k": 2,
+     "vllm_4k": 47.39,
+     "vllm_32k": 46.6,
+     "native_4k": 53.73,
+     "native_32k": 54.35
+    },
+    {
+     "pack": "3.05",
+     "k": 3,
+     "vllm_4k": 52.22,
+     "vllm_32k": 50.53,
+     "native_4k": 56.35,
+     "native_32k": 56.62
+    },
+    {
+     "pack": "4.05",
+     "k": 0,
+     "vllm_4k": null,
+     "vllm_32k": null,
+     "native_4k": 30.23,
+     "native_32k": 30.68
+    },
+    {
+     "pack": "4.05",
+     "k": 2,
+     "vllm_4k": null,
+     "vllm_32k": null,
+     "native_4k": 52.62,
+     "native_32k": 51.54
+    },
+    {
+     "pack": "4.05",
+     "k": 3,
+     "vllm_4k": 48.7,
+     "vllm_32k": 51.31,
+     "native_4k": 54.32,
+     "native_32k": 53.83
+    }
+   ],
+   "prefill_24k": {
+    "vllm_305": 1142.3,
+    "native_305": 1129.2,
+    "vllm_405": 1137.0,
+    "native_405": 1112.5
+   },
+   "ttft_3k_s": {
+    "vllm_305": 2.8,
+    "native_305": 5.1,
+    "note": "native streams the n-gram table from NVMe (trellis_disk) and pays about 1.8 s more on a cold short prompt"
+   },
+   "memavailable_gib": {
+    "vllm_305": 17.5,
+    "native_305": 62.7,
+    "vllm_405": 3.4,
+    "native_405": 47.8
+   },
+   "acceptance_k3_305": {
+    "vllm_per_position": [
+     0.863,
+     0.675,
+     0.571
+    ],
+    "native_per_position": [
+     0.875,
+     0.731,
+     0.617
+    ],
+    "native_mean_accepted_per_round": 2.22,
+    "vllm_mean_accepted_per_round": 2.11
+   },
+   "finding": "Native decode is 8 to 20 percent faster on the same pack: the largest gap is without a draft (30 ms against 36 ms per step), narrowing under MTP. Prefill is the same engine speed at 24k. 4.05 is again no faster than 3.05. Native leaves 45 to 60 GiB free because the n-gram table stays on disk.",
+   "plugin_on_150": {
+    "measurement_date": "2026-09-14",
+    "runtime": "vLLM 0.29.0 + vllm-exl3 0.4.2 with the exllamav3 1.5.0 extension substituted (exl3_moe call padded to the 1.5.0 arity), envelope config",
+    "rows": [
+     {
+      "k": 3,
+      "decode_4k": 52.05,
+      "decode_32k": 49.57,
+      "prefill_24k": 1138.5,
+      "acceptance": [
+       0.867,
+       0.69,
+       0.542
+      ]
+     },
+     {
+      "k": 0,
+      "decode_4k": 28.54,
+      "decode_32k": 28.23,
+      "prefill_24k": 1178.0,
+      "acceptance": null
+     }
+    ],
+    "finding": "Kernel version is not the lever: k=3 unchanged (52.05 vs 52.22), no-draft about 3 percent up at the edge of the spread. The native gap is engine step cost (hidden by MTP) and draft acceptance at positions 2 and 3."
+   }
   }
  }
 }
