@@ -16,7 +16,7 @@ request at a time, full 262,144-token context configured:
 | Cold prefill | about 1,100 tok/s, flat from 3k to 252k |
 | Cached-prefix TTFT, 196k prompt | **1.56 s** (cold: 178.7 s) |
 | Aggregate throughput, 2 streams | **78 tok/s** (the plateau) |
-| Native exllamav3 1.5.0, same pack, one stream, k=3 | 56.4 tok/s (the vLLM path: 52.2) |
+| exllamav3 directly, same pack, k=3 | 56.4 tok/s one stream, 135.8 aggregate at 8 streams (vLLM: 52.2 and 77.9) |
 | KV pool at the default config | 416,163 tokens, 1.6x concurrency at max context |
 
 Two rules that fall out of the measurements: use MTP k=3, and turn it off past
@@ -46,7 +46,7 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
   - [Concurrency](#concurrency)
   - [Levers that measured empty](#levers-that-measured-empty)
   - [The 4.05 bpw revision](#the-405-bpw-revision)
-  - [Native exllamav3 1.5.0 against this recipe](#native-exllamav3-150-against-this-recipe)
+  - [Running the pack through exllamav3 directly](#running-the-pack-through-exllamav3-directly)
 - [How things were measured](#how-things-were-measured)
 - [Hardware, model, memory](#hardware-model-memory)
 - [Historical results (2026-09-07 and 09-08, earlier build)](#historical-results-2026-09-07-and-09-08-earlier-build)
@@ -438,67 +438,103 @@ OOMs in about 100 seconds. `scripts/rename_unsharded_ngram.py` renames it to
 stock prep and loader handle it as a one-shard table with no code change. The
 proper fix is in the plugin's loader and scan tool.
 
-### Native exllamav3 1.5.0 against this recipe
+### Running the pack through exllamav3 directly
 
-The same two packs, run through exllamav3's own generator (1.5.0, extension
-JIT-built for sm_121 on this Spark) with the same prompt builder and salts as
-`qbench.py`: greedy, 128 new tokens, one job at a time, in-process timing,
-decode excluding TTFT, median of four. This is the single-stream ceiling for
-the format on this box; the recipe's vLLM path is what you serve from.
+The same weights also run through exllamav3's own engine, with no vLLM in the
+process. Measured here on 1.5.0 with the extension JIT-built for sm_121 on this
+Spark, same prompt builder and salts as `qbench.py`, greedy, 128 new tokens,
+decode excluding TTFT, median of four. Scripts are in `scripts/exl3_native/`.
 
-| Decode tok/s, 3.05 bpw | vLLM recipe (3k / 24k) | native 1.5.0 (3k / 24k) | gap |
+**Single stream**
+
+| Decode tok/s, 3.05 bpw | vLLM recipe (3k / 24k) | exllamav3 1.5.0 (3k / 24k) | gap |
 |---|---:|---:|---:|
 | No draft | 27.77 / 27.58 | **33.36 / 32.90** | +20% / +19% |
 | MTP k=2 | 47.39 / 46.60 | **53.73 / 54.35** | +13% / +17% |
 | MTP k=3 | 52.22 / 50.53 | **56.35 / 56.62** | +8% / +12% |
 
-| Decode tok/s, 4.05 bpw | vLLM recipe (3k / 24k) | native 1.5.0 (3k / 24k) |
+| Decode tok/s, 4.05 bpw | vLLM recipe (3k / 24k) | exllamav3 1.5.0 (3k / 24k) |
 |---|---:|---:|
 | No draft | not measured | 30.23 / 30.68 |
 | MTP k=2 | not measured | 52.62 / 51.54 |
 | MTP k=3 | 48.70 / 51.31 | 54.32 / 53.83 |
 
-| | vLLM recipe | native 1.5.0 |
+**Concurrency** (3k prompt, 128 tokens per stream, unique prefix per stream,
+aggregate over the window from the first stream's first token to the last
+stream's last token, median of two rounds)
+
+| Streams | vLLM k=3 | exllamav3 k=3 | vLLM no draft | exllamav3 no draft | exllamav3 per stream, k=3 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 54.3 | **56.4** | 28.9 | **32.8** | 56.0 |
+| 2 | 77.9 | **83.1** | 45.8 | **48.2** | 41.8 |
+| 4 | 71.8 | **96.6** | 44.0 | **84.9** | 24.2 |
+| 8 | wedged | **135.8** | 43.0 | **111.7** | 17.0 |
+
+**Everything else**
+
+| | vLLM recipe | exllamav3 1.5.0 |
 |---|---:|---:|
 | Cold prefill @ 24k, 3.05 / 4.05 | 1,142 / 1,137 tok/s | 1,129 / 1,112 tok/s |
 | TTFT on a cold 3k prompt, 3.05 | about 2.8 s | about 5.0 s |
+| Load time, 3.05 | 8 to 10 min (compile, graph capture) | 47 s |
 | MemAvailable while running, 3.05 / 4.05 | 17.5 / 3.4 GiB | 62.7 / 47.8 GiB |
 | Draft acceptance per position, k=3, 3.05 | 0.86 / 0.68 / 0.57 | 0.88 / 0.73 / 0.62 |
 
-**Native decode is 8 to 20% faster on the same weights.** The gap is largest
-without a draft, where a step costs 30 ms native against 36 ms through vLLM,
-and it narrows as MTP amortizes per-step cost across several tokens. At k=3 the
-6 ms splits into roughly two parts: the per-step overhead, and about 5% more
-tokens per verification round (3.22 against 3.11) from a draft that agrees with
-the target slightly more often at positions 2 and 3.
+**What the numbers say.** Single-stream decode is 8 to 20% faster on the same
+weights, prefill is the same engine speed, and concurrency keeps scaling where
+the vLLM path plateaus at two streams: 135.8 tok/s aggregate at eight streams
+with MTP against 77.9 at vLLM's best point. The per-stream rate at eight
+streams is 17 tok/s, so that is throughput for a queue, not eight interactive
+users. Memory is the other large difference: exllamav3 keeps the 30 to 36 GiB
+n-gram table on NVMe (`trellis_disk` mode) and reads it on demand, which costs
+about 1.8 s on a cold short prompt and nothing at 24k, and leaves 45 to 60 GiB
+free. The 4.05 revision is comfortable this way and marginal on vLLM. 4.05 is
+still no faster than 3.05 (54.3 against 56.4 at k=3).
 
-**Prefill is the same engine speed.** At 24k both paths sit at 1,110 to 1,140
-tok/s. The short-prompt TTFT is worse natively because exllamav3 keeps the
-n-gram table on NVMe (`trellis_disk` mode) and pays the reads on a cold prompt.
-That same choice is why native leaves 45 to 60 GiB free where the vLLM plugin
-holds the table resident, and why the 4.05 revision is comfortable natively
-(47.8 GiB free) and marginal on vLLM (3.4 GiB).
+**What you give up.** The harness that produced these numbers is exllamav3's
+Python generator driven in-process, and that is the honest scope of the
+comparison:
 
-**4.05 is again no faster than 3.05.** 54.3 against 56.4 tok/s at k=3, inside
-noise or slightly behind, matching the vLLM result above. The verdict does not
-change: 4.05 buys precision and acceptance, not speed.
+- No OpenAI-compatible API in what was measured. exllamav3 is normally served
+  through [TabbyAPI](https://github.com/theroyallab/tabbyAPI); its overhead and
+  its feature set on this model were not measured here, and the concurrency
+  numbers above are for jobs enqueued directly on the generator.
+- No reasoning parser, tool-call parser, structured output or the rest of
+  vLLM's serving surface. Clients that expect `--reasoning-parser qwen3` and
+  hermes tool calls get raw text.
+- No tensor parallel across two Sparks (exllamav3's TP path is one of the x86
+  code paths the aarch64 patch stubs out).
+- Prefix caching was not measured natively. exllamav3's generator has cache
+  reuse, so the 114x cached-prefix result above has no native counterpart yet.
+- The MTP draft needs `max_history=k` on both caches and `max_batch_size` set
+  to the number of concurrent jobs at cache creation; the harness does this.
+- It cannot run everything the plugin can. DeepSeek V4.1 with Engram has no
+  forward-correct graph in upstream exllamav3; for that pack the vLLM path is
+  the only one.
 
-Two things needed doing before 1.5.0 would run here. The release still carries
-x86-only intrinsics in its CPU MoE offload and tensor-parallel paths, so the
-aarch64 patch from the plugin's tooling was applied to the extension sources
-plus two stub symbols the new release added. And on GB10 `cudaMemGetInfo`
-reports MemFree rather than MemAvailable, so page cache left by a previous
-model load made exllamav3's autosplit refuse the 100 GiB pack while `/proc/meminfo`
-showed 118 GiB available; allocating and freeing 100 GiB on CUDA before the
-load makes the kernel reclaim it. The harness records both.
+**How to run it.** `scripts/exl3_native/setup_exllamav3_150.sh` builds a venv
+with exllamav3 1.5.0 and JIT-compiles the extension (the release still carries
+x86-only intrinsics in its CPU MoE offload and tensor-parallel paths, so it
+applies the aarch64 patch from the plugin repo plus two stub symbols 1.5.0
+added). `scripts/exl3_native/make_native_view.sh` builds a symlink view of a
+prepared pack with the native `config.json` and index, since `prepare_pack.sh`
+rewrites those for vLLM; for the 4.05 revision pass
+`ngram_embedding.safetensors.native` as the third argument, because 1.5.0 reads
+the unsharded table directly. `bench_native.py` and `bench_native_conc.py` are
+the two harnesses. One GB10 trap: `cudaMemGetInfo` reports MemFree rather than
+MemAvailable, so page cache left by a previous model load makes exllamav3's
+autosplit refuse a 100 GiB pack while `/proc/meminfo` shows 118 GiB available.
+Both harnesses take `--prealloc-gib 100`, which allocates and frees that much on
+CUDA first so the kernel reclaims the cache.
 
 #### Can the plugin get there?
 
 The obvious suspect was kernel age: the recipe pins exllamav3 1.4.7 and native
 ran 1.5.0. Tested directly by running this exact vLLM build with the 1.5.0
 extension underneath the plugin (1.5.0's `exl3_moe` grew five trailing
-arguments for its deterministic-accumulation path; padding them with the
-values that reproduce the 1.4.7 all-fused path lets 0.4.2 call it unchanged):
+arguments for its deterministic-accumulation path; passing the values that
+reproduce the 1.4.7 all-fused path lets the plugin call it, which is now
+[vllm-exl3 PR #22](https://github.com/vcruz305/vllm-exl3/pull/22)):
 
 | vLLM 0.29.0 + vllm-exl3 0.4.2, 3.05 bpw | exllamav3 1.4.7 | exllamav3 1.5.0 |
 |---|---:|---:|
@@ -508,9 +544,9 @@ values that reproduce the 1.4.7 all-fused path lets 0.4.2 call it unchanged):
 | Acceptance per position, k=3 | 0.86 / 0.68 / 0.57 | 0.87 / 0.69 / 0.54 |
 
 **Kernel version is not the lever.** k=3 is unchanged and no-draft moves about
-3%, at the edge of the day-to-day spread, which is what the profiler already said: decode time is trellis
-dequantization in kernels both engines share. What separates native from the
-recipe is above the kernels:
+3%, at the edge of the day-to-day spread, which is what the profiler already
+said: decode time is trellis dequantization in kernels both engines share. What
+separates native from the recipe is above the kernels:
 
 - **Per-step engine cost, hidden by MTP.** Without a draft a vLLM step is 36 ms
   against 30 ms native. At k=3 the step is 58 ms against 57 ms, so speculation
@@ -524,14 +560,20 @@ recipe is above the kernels:
   Qwen4Exp MTP proposer rather than the plugin. That is the one place a code
   change could recover measurable speed, and it needs a read of both proposers
   side by side before anyone touches it.
-- **The n-gram table.** Native keeps it on NVMe and reads it on demand; the
-  plugin loads it resident. That costs nothing at 24k prefill or in decode, adds
-  about 1.8 s to a cold short prompt, and frees 30 to 36 GiB. A disk-backed
-  table option in the plugin would not change decode speed, but it is what
-  would let the 4.05 revision boot at 262k on one Spark.
+- **Concurrency.** The plateau at two streams is vLLM's scheduling of this
+  model, not the kernels; the same kernels scale to eight streams natively.
+- **The n-gram table.** A disk-backed table option in the plugin would not
+  change decode speed, but it is what would let the 4.05 revision boot at 262k
+  on one Spark.
 
 Everything else that could plausibly matter was measured empty earlier in this
 README (`max-num-seqs`, CUDA graph mode, batched-token size, fp8 KV).
+
+**Which to use.** For one user on one Spark, exllamav3 directly is the faster,
+roomier and simpler engine, and it loads in under a minute. The vLLM path is
+for what needs vLLM: the OpenAI API with its parsers and structured output,
+tensor parallel across two Sparks, tooling that assumes a vLLM endpoint, and
+packs exllamav3 cannot run.
 
 ## How things were measured
 

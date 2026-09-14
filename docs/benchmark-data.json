@@ -546,6 +546,52 @@
      }
     ],
     "finding": "Kernel version is not the lever: k=3 unchanged (52.05 vs 52.22), no-draft about 3 percent up at the edge of the spread. The native gap is engine step cost (hidden by MTP) and draft acceptance at positions 2 and 3."
+   },
+   "concurrency": {
+    "measurement_date": "2026-09-14",
+    "context": 4096,
+    "tokens_per_stream": 128,
+    "rounds": 2,
+    "method": "N jobs enqueued together on exllamav3's dynamic generator, unique prompt prefix per stream. Aggregate is total new tokens over the window from the first stream's first token to the last stream's last token; per-stream is that stream's own decode rate. Median of two rounds.",
+    "rows": [
+     {
+      "streams": 1,
+      "native_k3": 56.41,
+      "native_no_draft": 32.79,
+      "vllm_k3": 54.3,
+      "vllm_no_draft": 28.9,
+      "native_per_stream_k3": 55.97,
+      "native_per_stream_no_draft": 32.53
+     },
+     {
+      "streams": 2,
+      "native_k3": 83.12,
+      "native_no_draft": 48.24,
+      "vllm_k3": 77.9,
+      "vllm_no_draft": 45.8,
+      "native_per_stream_k3": 41.84,
+      "native_per_stream_no_draft": 23.93
+     },
+     {
+      "streams": 4,
+      "native_k3": 96.56,
+      "native_no_draft": 84.91,
+      "vllm_k3": 71.8,
+      "vllm_no_draft": 44.0,
+      "native_per_stream_k3": 24.19,
+      "native_per_stream_no_draft": 21.06
+     },
+     {
+      "streams": 8,
+      "native_k3": 135.81,
+      "native_no_draft": 111.69,
+      "vllm_k3": null,
+      "vllm_no_draft": 43.0,
+      "native_per_stream_k3": 17.0,
+      "native_per_stream_no_draft": 13.85
+     }
+    ],
+    "finding": "Native keeps scaling to eight streams where the vLLM path plateaus at two: 135.8 tok/s aggregate at k=3 and 111.7 without a draft, against 77.9 and 43.0. The per-stream rate at eight streams is 17 tok/s with MTP."
    }
   }
  }
