@@ -61,6 +61,25 @@ fi
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export VLLM_EXL3_NGRAM_KERNEL="${VLLM_EXL3_NGRAM_KERNEL:-ext}"
+# Where the packed n-gram table lives. resident: one int16 tensor on the device
+# (30.4 GiB for 3.05, 36.4 GiB for 4.05). disk: vllm-exl3 keeps the checkpoint's
+# memory-mapped views and gathers each lookup's rows on the host, so the table
+# costs page cache instead of device memory. That is what lets the 4.05 bpw
+# revision boot at 262,144 on one Spark (954k-token KV pool, 18 GiB free). The
+# host gather has to stay outside CUDA graphs, so disk mode runs PIECEWISE-only
+# graphs with the lookup as a splitting op, which costs 5 to 7% decode (48.3
+# against 52.2 tok/s at k=3 on 3.05). Needs vllm-exl3 main at 94c29ba or newer.
+NGRAM_TABLE="${NGRAM_TABLE:-resident}"
+case "$NGRAM_TABLE" in
+  resident) ;;
+  disk)
+    export VLLM_EXL3_NGRAM_TABLE=disk
+    # vLLM's own list of graph-splitting ops for this version, plus the plugin's lookup.
+    SPLIT_OPS=$(python3 -c 'import json; from vllm.config import CompilationConfig as C; print(json.dumps(list(C._attention_ops) + ["vllm::exl3_ngram_lookup_out"]))') \
+      || { echo "NGRAM_TABLE=disk: could not read vLLM's splitting ops (is the venv active?)" >&2; exit 2; }
+    ;;
+  *) echo "NGRAM_TABLE must be 'resident' or 'disk', got '$NGRAM_TABLE'" >&2; exit 2 ;;
+esac
 
 ARGS=(
   serve "$MODEL_DIR"
@@ -90,7 +109,10 @@ fi
 if [[ -n "$PROFILER_DIR" ]]; then
   ARGS+=(--profiler-config "{\"profiler\":\"torch\",\"torch_profiler_dir\":\"$PROFILER_DIR\"}")
 fi
+if [[ "$NGRAM_TABLE" == "disk" ]]; then
+  ARGS+=(--compilation-config "{\"cudagraph_mode\":\"PIECEWISE\",\"splitting_ops\":$SPLIT_OPS}")
+fi
 
-echo "VLLM_EXL3_NGRAM_KERNEL=$VLLM_EXL3_NGRAM_KERNEL GPU_MEM_UTIL=$GPU_MEM_UTIL MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS MAMBA_SSM_DTYPE=$MAMBA_SSM_DTYPE SPEC_CONFIG=${SPEC_CONFIG:-<none>}"
+echo "VLLM_EXL3_NGRAM_KERNEL=$VLLM_EXL3_NGRAM_KERNEL NGRAM_TABLE=$NGRAM_TABLE GPU_MEM_UTIL=$GPU_MEM_UTIL MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS MAMBA_SSM_DTYPE=$MAMBA_SSM_DTYPE SPEC_CONFIG=${SPEC_CONFIG:-<none>}"
 echo "vllm ${ARGS[*]}"
 exec vllm "${ARGS[@]}"

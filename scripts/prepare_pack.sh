@@ -8,15 +8,24 @@
 set -euo pipefail
 
 PACK_DIR="${PACK_DIR:?set PACK_DIR to the downloaded turboderp/Qwen3.8-Flash-Next-exl3 revision directory}"
-PLUGIN_REPO="${PLUGIN_REPO:?set PLUGIN_REPO to a checkout of vcruz305/vllm-exl3 (feat/native-turboderp-packs)}"
+PLUGIN_REPO="${PLUGIN_REPO:?set PLUGIN_REPO to a checkout of vcruz305/vllm-exl3 (main)}"
 
 TOOLS="$PLUGIN_REPO/tools/exl3_pack_tools"
 for f in qwen_pack_scan.py qwen_pack_config.py regenerate_safetensors_index.py; do
   if [[ ! -f "$TOOLS/$f" ]]; then
-    echo "missing $TOOLS/$f -- is PLUGIN_REPO checked out at feat/native-turboderp-packs?" >&2
+    echo "missing $TOOLS/$f -- is PLUGIN_REPO a checkout of vcruz305/vllm-exl3 main?" >&2
     exit 1
   fi
 done
+# Packs from exllamav3 1.5.0 onward ship the n-gram table as one unsharded
+# tensor (the 4.05bpw_h6_ng6 revision does). The scan tool on vllm-exl3 main
+# (94c29ba, 2026-09-14) reads that layout; an older checkout misfiles it as a
+# dense linear and the boot OOMs, so refuse rather than prepare a broken pack.
+if ! grep -q '"sharded"' "$TOOLS/qwen_pack_scan.py"; then
+  echo "$TOOLS/qwen_pack_scan.py predates unsharded n-gram support; update PLUGIN_REPO to main (94c29ba or newer)." >&2
+  echo "With an older plugin, scripts/rename_unsharded_ngram.py is the workaround for unsharded packs." >&2
+  exit 1
+fi
 if [[ ! -f "$PACK_DIR/config.json" ]]; then
   echo "missing $PACK_DIR/config.json -- is PACK_DIR the pack revision directory?" >&2
   exit 1

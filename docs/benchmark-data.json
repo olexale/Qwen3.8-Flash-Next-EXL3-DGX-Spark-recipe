@@ -463,7 +463,62 @@
      "p405": 0.741
     }
    ],
-   "finding": "Speed unchanged within noise; acceptance up 68 to 74 percent; cost is 22 GiB more resident, util 0.92, half the context, 2 to 3 GiB free, and no 262k on one Spark."
+   "finding": "Speed unchanged within noise; acceptance up 68 to 74 percent; cost is 22 GiB more resident, util 0.92, half the context, 2 to 3 GiB free, and no 262k on one Spark. Superseded for memory on 2026-09-14: with NGRAM_TABLE=disk the revision boots at 262k, see disk_mode.",
+   "disk_mode": {
+    "measurement_date": "2026-09-14",
+    "runtime": "vLLM 0.29.0, exllamav3 1.4.7, vllm-exl3 main 94c29ba, VLLM_EXL3_NGRAM_TABLE=disk, cudagraph_mode PIECEWISE with vllm::exl3_ngram_lookup_out as a splitting op",
+    "rows": [
+     {
+      "metric": "max_context_that_boots",
+      "resident": 131072,
+      "disk": 262144
+     },
+     {
+      "metric": "gpu_memory_utilization",
+      "resident": 0.92,
+      "disk": 0.8
+     },
+     {
+      "metric": "kv_pool_tokens",
+      "resident": 195509,
+      "disk": 954453
+     },
+     {
+      "metric": "memavailable_gib",
+      "resident": 3.4,
+      "disk": 19.0
+     },
+     {
+      "metric": "decode_4k_mtp_k3",
+      "resident": 48.7,
+      "disk": 41.1
+     },
+     {
+      "metric": "decode_32k_mtp_k3",
+      "resident": 51.31,
+      "disk": 47.9
+     },
+     {
+      "metric": "decode_4k_no_draft",
+      "resident": null,
+      "disk": 24.4
+     },
+     {
+      "metric": "prefill_24k",
+      "resident": 1137.0,
+      "disk": 1128.0
+     }
+    ],
+    "piecewise_cost_on_305": {
+     "decode_4k_mtp_k3": 48.25,
+     "decode_32k_mtp_k3": 48.01,
+     "reference": [
+      52.22,
+      50.53
+     ]
+    },
+    "finding": "With the n-gram table on NVMe the 4.05 revision boots at 262k on one Spark with a 954k-token KV pool and 18 to 20 GiB free, about 10 percent slower than 3.05 at the same context: PIECEWISE-only graphs cost 5 to 7 percent and rows page in on first touch."
+   }
   },
   "native_exl3": {
    "measurement_date": "2026-09-14",

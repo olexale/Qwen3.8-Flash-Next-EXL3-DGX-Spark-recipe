@@ -18,6 +18,7 @@ request at a time, full 262,144-token context configured:
 | Aggregate throughput, 4 streams, MTP k=3 | **156 tok/s** steady on short prompts, 103 on 3k-token prompts |
 | exllamav3 directly, same pack, k=3 | 58.8 tok/s one stream, 152.0 aggregate at 8 streams (vLLM: 54.8 and 157.6) |
 | KV pool at the default config | 416,163 tokens, 1.6x concurrency at max context |
+| 4.05 bpw at 262k, n-gram table on NVMe | boots at util 0.80, 954k-token KV pool, 41 to 48 tok/s at k=3 |
 
 Two rules that fall out of the measurements: use MTP k=3, and turn it off past
 163,840 tokens of prompt, where draft acceptance goes to exactly zero and
@@ -78,7 +79,10 @@ upstreamed. Everything below is scripted and idempotent.
 - **`exllamav3` 1.4.7, built from source**, with the aarch64 patch shipped in
   the plugin repo (`tools/patch_exllamav3_aarch64.py`). The plugin imports the
   compiled `exllamav3_ext` module, so the pure-Python wheel is not enough.
-- **`vllm-exl3` from `main`**, 0.4.2 or newer:
+- **`vllm-exl3` from `main`**, at `94c29ba` (2026-09-14) or newer. That is where
+  unsharded n-gram tables and the disk-backed table mode landed (PRs #22 to
+  #24); an older checkout still serves the 3.05 pack but needs the rename step
+  below for 4.05:
   ```bash
   pip install git+https://github.com/vcruz305/vllm-exl3@main
   ```
@@ -132,13 +136,12 @@ This runs, in order:
    `model.safetensors.index.json`, which vLLM uses as the load list (backs up
    `.native`).
 
-If the pack's n-gram table is one unsharded tensor rather than 128 shards (the
-`4.05bpw_h6_ng6` revision ships this way; newer exllamav3 writes it so), run
-this first, or the boot OOMs in seconds:
-
-```bash
-python scripts/rename_unsharded_ngram.py ~/models/Qwen3.8-Flash-Next-exl3-4.05bpw
-```
+Packs from exllamav3 1.5.0 onward ship the n-gram table as one unsharded
+tensor (the `4.05bpw_h6_ng6` revision does). The scan tool on `main` reads
+that layout and the config it emits carries `ngram_embedding.sharded: false`;
+`prepare_pack.sh` refuses an older plugin checkout rather than prepare a pack
+that would OOM at boot. `scripts/rename_unsharded_ngram.py` stays in the repo
+as the workaround for an old plugin build only.
 
 Optional GPU verification gates ship in `tools/verify_native_pack/`
 (`test_ngram_embedding.py`, `mul1_check.py`, `pad_check.py`,
@@ -191,14 +194,24 @@ tokens, so k=3 drafts three and verifies up to four per step:
 SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":2}' bash scripts/serve_one_spark_qwen.sh
 ```
 
+To serve the 4.05 bpw revision at the full context, keep the n-gram table on
+NVMe instead of the device. This is what makes 4.05 fit on one Spark (954k-token
+KV pool at 262k, 18 GiB free); it costs 5 to 7% decode because the host-side
+lookup has to stay outside CUDA graphs (PIECEWISE-only), see
+[The 4.05 bpw revision](#the-405-bpw-revision):
+
+```bash
+MODEL_DIR=~/models/Qwen3.8-Flash-Next-exl3-4.05bpw NGRAM_TABLE=disk bash scripts/serve_one_spark_qwen.sh
+```
+
 Defaults are `MAX_MODEL_LEN=262144`, `GPU_MEM_UTIL=0.80`, `MAX_NUM_SEQS=4`,
 `MAMBA_SSM_DTYPE=bfloat16`, port 8899, `--enable-prefix-caching`,
 `--reasoning-parser qwen3`. Load takes about 9.5 minutes from cold NVMe and
 roughly 2.5 minutes when the pack is still in page cache. See the script for
 every override (`PORT`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL`, `MAX_NUM_SEQS`,
-`SPEC_CONFIG`, `MAMBA_SSM_DTYPE`, `SERVED_NAME`, `PROFILER_DIR`) and
-`VLLM_EXL3_NGRAM_KERNEL=ext|torch` (default `ext`) for the n-gram embedding
-kernel.
+`SPEC_CONFIG`, `MAMBA_SSM_DTYPE`, `SERVED_NAME`, `PROFILER_DIR`,
+`NGRAM_TABLE=resident|disk`) and `VLLM_EXL3_NGRAM_KERNEL=ext|torch` (default
+`ext`) for the n-gram embedding kernel.
 
 ### 6. Benchmark
 
@@ -412,8 +425,8 @@ Recorded so nobody re-tests them:
 
 turboderp also publishes `4.05bpw_h6_ng6`: dense linears at K=6 and experts at
 K=4 (against K=5 and K=3), a 6-bit n-gram table, 107.5 GB on disk. Measured on
-the same build and harness. It needs `--gpu-memory-utilization 0.92` to boot at
-all, and a 131,072 context:
+the same build and harness with the table resident on the device (the default),
+it needs `--gpu-memory-utilization 0.92` to boot at all, and a 131,072 context:
 
 | | 3.05 bpw | 4.05 bpw |
 |---|---:|---:|
@@ -439,23 +452,42 @@ draft more often.
 utilisation forced to 0.92, and half the context. At 0.92 the box sits under
 earlyoom's 3% trigger and survives only because swap is free; a 262k attempt at
 0.93 without a draft drove MemAvailable to 1 GiB during load and was killed by
-the watchdog before KV allocation. **The 4.05 revision does not reach 262k on
-one Spark, with or without a draft**, and the configuration that does boot is
-not one to serve from. Quality was not measured here; that needs the sixcat
-harness from the historical comparison.
+the watchdog before KV allocation. With the table resident, **the 4.05
+revision does not reach 262k on one Spark**, and the configuration that does
+boot is not one to serve from. Quality was not measured here; that needs the
+sixcat harness from the historical comparison.
 
-One thing to know before trying it. This revision ships the n-gram table as one
-unsharded `ngram_embedding.trellis` tensor (`I16 [320001536, 61]`, 39 GB)
-where 3.05 ships 128 `shard_N.trellis` shards. vllm-exl3 0.4.2's loader builds
-`shard_{i}` modules and checks `shard_0.trellis` by name, its scan tool matches
-only `shard_N`, and the exllamav3 1.4.7 on the box reads only `shard_` too, so
-the pack comes from a newer exllamav3 and the tooling is behind the format.
-Unhandled, the scan misfiles the tensor as a K=3 dense linear, the config step
-emits `ngram_embedding: None`, vLLM allocates the table dense, and the boot
-OOMs in about 100 seconds. `scripts/rename_unsharded_ngram.py` renames it to
-`shard_0.trellis` in place (streamed, backed up, hash-checked), after which the
-stock prep and loader handle it as a one-shard table with no code change. The
-proper fix is in the plugin's loader and scan tool.
+**With the n-gram table on NVMe it fits.** vllm-exl3 `main` (`94c29ba`) can
+keep the table as the checkpoint's memory-mapped views and gather each
+lookup's rows on the host (`NGRAM_TABLE=disk` in the serve script,
+`VLLM_EXL3_NGRAM_TABLE=disk` underneath), so the 36 GiB never lands on the
+device. Measured 2026-09-14, same harness, `MODEL_DIR=<4.05> NGRAM_TABLE=disk`:
+
+| 4.05 bpw | table resident, 131k, util 0.92 | table on NVMe, 262k, util 0.80 |
+|---|---:|---:|
+| Boots at 262,144 | no | **yes** |
+| KV pool | 195,509 tokens (1.49x at 131k) | **954,453 tokens (3.64x at 262k)** |
+| MemAvailable while serving | 3.4 GiB | **18 to 20 GiB** |
+| Decode @ 4k / 32k, MTP k=3 | 48.70 / 51.31 | 41.1 / 47.9 |
+| Decode @ 4k, no draft | not measured | 24.4 |
+| Cold prefill @ 24k | 1,137 | 1,128 |
+
+The decode cost has two parts. The host gather is a synchronization point, so
+the lookup must run outside CUDA graphs: disk mode uses PIECEWISE-only graphs
+with the lookup as a splitting op, and PIECEWISE alone costs 5 to 7% on this
+model (measured on the 3.05 pack: 48.25 / 48.01 against 52.22 / 50.53 at k=3).
+On top of that, rows page in from NVMe the first time a prompt touches them,
+which is why the short-prompt samples start slow (32.6 to 46.0 tok/s across
+the four) and the 32k figure sits where PIECEWISE alone would put it. The
+right way to read it: 4.05 at 262k on one Spark is now a real configuration,
+about 10% slower than 3.05 at the same context, with 15 GiB more headroom than
+3.05 resident.
+
+This revision ships the n-gram table as one unsharded `ngram_embedding.trellis`
+tensor (`I16 [320001536, 61]`, 39 GB) where 3.05 ships 128 `shard_N.trellis`
+shards. Plugin builds before `94c29ba` misfiled it as a dense linear and the
+boot OOMed in about 100 seconds; `scripts/rename_unsharded_ngram.py` is the
+workaround for those builds only.
 
 ### Running the pack through exllamav3 directly
 
@@ -544,9 +576,10 @@ x86-only intrinsics in its CPU MoE offload and tensor-parallel paths, so it
 applies the aarch64 patch from the plugin repo plus two stub symbols 1.5.0
 added). `scripts/exl3_native/make_native_view.sh` builds a symlink view of a
 prepared pack with the native `config.json` and index, since `prepare_pack.sh`
-rewrites those for vLLM; for the 4.05 revision pass
-`ngram_embedding.safetensors.native` as the third argument, because 1.5.0 reads
-the unsharded table directly. `bench_native.py` and `bench_native_conc.py` are
+rewrites those for vLLM; for a 4.05 pack that was prepared with the old
+`rename_unsharded_ngram.py` step, pass `ngram_embedding.safetensors.native` as
+the third argument so exllamav3 reads the original unsharded file. A pack
+prepared with the current tools needs no third argument. `bench_native.py` and `bench_native_conc.py` are
 the two harnesses. One GB10 trap: `cudaMemGetInfo` reports MemFree rather than
 MemAvailable, so page cache left by a previous model load makes exllamav3's
 autosplit refuse a 100 GiB pack while `/proc/meminfo` shows 118 GiB available.
@@ -791,8 +824,8 @@ head, so it is not usable yet. NVFP4 does not fit on one Spark for this model:
 - **Batched decode slows with context.** Steady-state aggregate at four
   streams is 156 tok/s on short prompts and 103 on 3k-token prompts (MTP k=3).
   See Concurrency.
-- **The 4.05 bpw revision does not fit at 262k**, needs util 0.92 for 131k, and leaves 2 to 3 GiB free. See The 4.05 bpw revision.
-- **Unsharded n-gram tables** (4.05 revision, newer exllamav3) are not recognised by the prep tool or loader; `scripts/rename_unsharded_ngram.py` is the workaround.
+- **The 4.05 bpw revision needs `NGRAM_TABLE=disk` to reach 262k**, which costs 5 to 7% decode (PIECEWISE-only CUDA graphs) plus first-touch page-ins. Resident, it stops at 131k, util 0.92, 2 to 3 GiB free. See The 4.05 bpw revision.
+- **Unsharded n-gram tables need vllm-exl3 `main` at `94c29ba` or newer.** Older builds misfile the table; `scripts/rename_unsharded_ngram.py` is their workaround.
 - **Cold prefill ceiling of about 1,100 tok/s**, not improved by chunk size.
   Likely the quantized-weight path; unconfirmed without a prefill profile.
 - Fat-expert prefill bug (fixed 2026-09-08, vllm-exl3 PR #5). Before the fix,
