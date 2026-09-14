@@ -335,43 +335,72 @@
    "finding": "MTP speedup survives real sampling. Acceptance falls 68.0 to 64.4 percent from greedy to temperature 1.0, costing about 6 percent."
   },
   "concurrency": {
-   "context": 4096,
+   "measurement_date": "2026-09-14",
+   "context": 256,
    "tokens_per_stream": 128,
    "rounds": 2,
-   "method": "Aggregate is total tokens over the slowest stream's decode window. Unique prompt prefix per stream.",
+   "max_num_seqs": 8,
+   "method": "Steady aggregate: total tokens over the span in which every stream is decoding. Window aggregate: first stream's first token to last stream's last token (charges other streams' chunked prefills to the first stream). Unique prompt prefix per stream, short prompts of about 190 tokens.",
    "rows": [
     {
      "streams": 1,
-     "mtp_k3": 54.3,
-     "no_draft": 28.9
+     "mtp_k3": 54.8,
+     "no_draft": 29.0,
+     "mtp_k3_window": 54.8,
+     "no_draft_window": 29.0
     },
     {
      "streams": 2,
-     "mtp_k3": 77.9,
-     "no_draft": 45.8
+     "mtp_k3": 89.4,
+     "no_draft": 49.1,
+     "mtp_k3_window": 83.5,
+     "no_draft_window": 48.2
     },
     {
      "streams": 4,
-     "mtp_k3": 71.8,
-     "no_draft": 44.0
+     "mtp_k3": 155.6,
+     "no_draft": 87.2,
+     "mtp_k3_window": 147.7,
+     "no_draft_window": 82.3
     },
     {
      "streams": 8,
-     "mtp_k3": null,
-     "no_draft": 43.0
+     "mtp_k3": 157.6,
+     "no_draft": 153.4,
+     "mtp_k3_window": 146.9,
+     "no_draft_window": 135.5
     }
    ],
-   "no_draft_per_stream_n8": [
-    5.0,
-    5.7,
-    6.4,
-    7.3,
-    8.9,
-    10.4,
-    13.8,
-    13.8
-   ],
-   "finding": "Aggregate plateaus at two streams with or without a draft. MTP k=3 wins at every concurrency. Sweet spot is k=3 at two streams, about 78 tok/s aggregate.",
+   "long_prompts": {
+    "context": 4096,
+    "tokens_per_stream": 512,
+    "rounds": 1,
+    "rows": [
+     {
+      "streams": 1,
+      "mtp_k3": 53.2,
+      "no_draft": 28.7
+     },
+     {
+      "streams": 2,
+      "mtp_k3": 79.6,
+      "no_draft": 46.0
+     },
+     {
+      "streams": 4,
+      "mtp_k3": 102.9,
+      "no_draft": 63.0
+     },
+     {
+      "streams": 8,
+      "mtp_k3": 90.5,
+      "no_draft": 73.1
+     }
+    ]
+   },
+   "superseded": "The 2026-09-13 rows (54.3 / 77.9 / 71.8 / n/a with MTP, 28.9 / 45.8 / 44.0 / 43.0 without) used 3k prompts, 128 tokens per stream and the window aggregate alone, which measured chunked-prefill interleaving rather than decode.",
+   "profile": "1-stream vs 4-stream decode window, short prompts, 256 tokens: exl3_moe GPU time 1.66 s to 3.27 s, dense EXL3 flat (1.87 s to 1.83 s).",
+   "finding": "The engine scales: 156 tok/s aggregate at four streams and 158 at eight with MTP k=3 on short prompts, 153 without a draft at eight. Long contexts cost more per batched step (103 at four streams on 3k prompts). Sweet spot is MTP k=3 at four streams.",
    "empty_levers": [
     "max-num-seqs 2 vs 4: 52.84 vs 52.22 tok/s, inside noise, KV pool +2%",
     "CUDA graph mode: already FULL_AND_PIECEWISE on every boot",
@@ -561,7 +590,9 @@
       "vllm_k3": 54.3,
       "vllm_no_draft": 28.9,
       "native_per_stream_k3": 55.97,
-      "native_per_stream_no_draft": 32.53
+      "native_per_stream_no_draft": 32.53,
+      "vllm_k3_steady_long": 53.2,
+      "vllm_no_draft_steady_long": 28.7
      },
      {
       "streams": 2,
@@ -570,7 +601,9 @@
       "vllm_k3": 77.9,
       "vllm_no_draft": 45.8,
       "native_per_stream_k3": 41.84,
-      "native_per_stream_no_draft": 23.93
+      "native_per_stream_no_draft": 23.93,
+      "vllm_k3_steady_long": 79.6,
+      "vllm_no_draft_steady_long": 46.0
      },
      {
       "streams": 4,
@@ -579,7 +612,9 @@
       "vllm_k3": 71.8,
       "vllm_no_draft": 44.0,
       "native_per_stream_k3": 24.19,
-      "native_per_stream_no_draft": 21.06
+      "native_per_stream_no_draft": 21.06,
+      "vllm_k3_steady_long": 102.9,
+      "vllm_no_draft_steady_long": 63.0
      },
      {
       "streams": 8,
@@ -588,10 +623,45 @@
       "vllm_k3": null,
       "vllm_no_draft": 43.0,
       "native_per_stream_k3": 17.0,
-      "native_per_stream_no_draft": 13.85
+      "native_per_stream_no_draft": 13.85,
+      "vllm_k3_steady_long": 90.5,
+      "vllm_no_draft_steady_long": 73.1
      }
     ],
-    "finding": "Native keeps scaling to eight streams where the vLLM path plateaus at two: 135.8 tok/s aggregate at k=3 and 111.7 without a draft, against 77.9 and 43.0. The per-stream rate at eight streams is 17 tok/s with MTP."
+    "finding": "Parity on short prompts (both engines reach 150 to 158 tok/s at eight streams; vLLM ahead at four with MTP). On 3k-token prompts exllamav3 is ahead at eight streams (135.8 against vLLM's steady 90.5). The earlier vLLM window numbers understated it.",
+    "short_prompts": {
+     "context": 256,
+     "rows": [
+      {
+       "streams": 1,
+       "native_k3": 58.8,
+       "native_no_draft": 31.3,
+       "vllm_k3_steady": 54.8,
+       "vllm_no_draft_steady": 29.0
+      },
+      {
+       "streams": 2,
+       "native_k3": 87.8,
+       "native_no_draft": 54.4,
+       "vllm_k3_steady": 89.4,
+       "vllm_no_draft_steady": 49.1
+      },
+      {
+       "streams": 4,
+       "native_k3": 104.4,
+       "native_no_draft": 94.8,
+       "vllm_k3_steady": 155.6,
+       "vllm_no_draft_steady": 87.2
+      },
+      {
+       "streams": 8,
+       "native_k3": 152.0,
+       "native_no_draft": 144.0,
+       "vllm_k3_steady": 157.6,
+       "vllm_no_draft_steady": 153.4
+      }
+     ]
+    }
    }
   }
  }

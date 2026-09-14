@@ -15,8 +15,8 @@ request at a time, full 262,144-token context configured:
 | Fastest measured point | **53.1 tok/s at 163,506 tokens** |
 | Cold prefill | about 1,100 tok/s, flat from 3k to 252k |
 | Cached-prefix TTFT, 196k prompt | **1.56 s** (cold: 178.7 s) |
-| Aggregate throughput, 2 streams | **78 tok/s** (the plateau) |
-| exllamav3 directly, same pack, k=3 | 56.4 tok/s one stream, 135.8 aggregate at 8 streams (vLLM: 52.2 and 77.9) |
+| Aggregate throughput, 4 streams, MTP k=3 | **156 tok/s** steady on short prompts, 103 on 3k-token prompts |
+| exllamav3 directly, same pack, k=3 | 58.8 tok/s one stream, 152.0 aggregate at 8 streams (vLLM: 54.8 and 157.6) |
 | KV pool at the default config | 416,163 tokens, 1.6x concurrency at max context |
 
 Two rules that fall out of the measurements: use MTP k=3, and turn it off past
@@ -357,25 +357,44 @@ At a realistic 0.7 the speedup is intact. At 1.0 it costs about 6%.
 
 ### Concurrency
 
-Four-thousand-token prompts, 128 tokens each, unique prefix per stream,
-aggregate over the slowest stream's decode window:
+Two aggregates are reported, because they answer different questions. The
+*window* aggregate is total tokens over the span from the first stream's first
+token to the last stream's last token: what a queue of N users sees, and under
+vLLM's chunked prefill it charges the other streams' prefills to the first
+stream. The *steady* aggregate is total tokens over the span in which every
+stream is decoding. Unique prefix per stream, `MAX_NUM_SEQS=8`, temperature 0.
 
-| streams | MTP k=3 aggregate | no draft aggregate |
-|---:|---:|---:|
-| 1 | 54.3 | 28.9 |
-| 2 | 77.9 | 45.8 |
-| 4 | 71.8 | 44.0 |
-| 8 | not run | 43.0 |
+**Short prompts (about 190 tokens), 128 tokens per stream, median of two rounds**
 
-**The engine does not scale past two streams,** with or without a draft, and
-per-stream rates at N=8 without a draft spread from 5.0 to 13.8 tok/s. MTP k=3
-wins at every concurrency, so it is the right setting for multi-user serving
-too. Zero scaling from two to eight streams on a bandwidth-bound MoE is the
-tell: with 512 experts and top-10 routing, more streams touch more distinct
-experts per step, so weight reads grow rather than amortise, and the EXL3
-kernels have a known slow regime for small dense batches on top (see Known
-limitations). **Throughput sweet spot: MTP k=3 at two streams, about 78 tok/s
-aggregate.**
+| streams | MTP k=3, steady | MTP k=3, window | no draft, steady | no draft, window |
+|---:|---:|---:|---:|---:|
+| 1 | 54.8 | 54.8 | 29.0 | 29.0 |
+| 2 | 89.4 | 83.5 | 49.1 | 48.2 |
+| 4 | **155.6** | 147.7 | 87.2 | 82.3 |
+| 8 | **157.6** | 146.9 | **153.4** | 135.5 |
+
+**3k-token prompts, 512 tokens per stream, one round**
+
+| streams | MTP k=3, steady | MTP k=3, window | no draft, steady | no draft, window |
+|---:|---:|---:|---:|---:|
+| 1 | 53.2 | 53.2 | 28.7 | 28.7 |
+| 2 | 79.6 | 77.0 | 46.0 | 44.8 |
+| 4 | **102.9** | 64.3 | 63.0 | 41.5 |
+| 8 | 90.5 | 47.0 | **73.1** | 40.9 |
+
+**The engine scales.** An earlier version of this section reported a plateau at
+two streams (78 tok/s). That came from 3k-token prompts, 128 tokens per stream
+and the window aggregate alone: with that little decode per stream the window
+is mostly the other streams' chunked prefills, so it measured the scheduler's
+interleaving rather than decode. A torch profile of a 1-stream and a 4-stream
+decode window (short prompts, 256 tokens) shows the kernels batching as they
+should: the fused MoE takes 2.0x the GPU time for 4x the tokens and the dense
+EXL3 layers are flat. Long contexts do cost more per batched step (3k prompts:
+103 tok/s at four streams against 156 with short prompts), which is the
+attention and PLE state work per token. MTP k=3 wins at every concurrency up to
+four streams and is level with no draft at eight. **Throughput sweet spot: MTP
+k=3 at four streams, about 150 tok/s aggregate on short prompts and about 100
+on 3k-token prompts.**
 
 ### Levers that measured empty
 
@@ -443,7 +462,7 @@ proper fix is in the plugin's loader and scan tool.
 The same weights also run through exllamav3's own engine, with no vLLM in the
 process. Measured here on 1.5.0 with the extension JIT-built for sm_121 on this
 Spark, same prompt builder and salts as `qbench.py`, greedy, 128 new tokens,
-decode excluding TTFT, median of four. Scripts are in `scripts/exl3_native/`.
+decode excluding TTFT, median of four. Scripts are in `scripts/exl3_native/`; the vLLM concurrency client is `scripts/concurrency.py`.
 
 **Single stream**
 
@@ -459,16 +478,21 @@ decode excluding TTFT, median of four. Scripts are in `scripts/exl3_native/`.
 | MTP k=2 | not measured | 52.62 / 51.54 |
 | MTP k=3 | 48.70 / 51.31 | 54.32 / 53.83 |
 
-**Concurrency** (3k prompt, 128 tokens per stream, unique prefix per stream,
-aggregate over the window from the first stream's first token to the last
-stream's last token, median of two rounds)
+**Concurrency** (128 tokens per stream, unique prefix per stream, median of two
+rounds at short prompts, aggregate tok/s. exllamav3's generator prefills every
+queued job before it decodes, so its window aggregate is a steady-state number;
+it is set against the steady aggregate from the Concurrency section above)
 
-| Streams | vLLM k=3 | exllamav3 k=3 | vLLM no draft | exllamav3 no draft | exllamav3 per stream, k=3 |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 54.3 | **56.4** | 28.9 | **32.8** | 56.0 |
-| 2 | 77.9 | **83.1** | 45.8 | **48.2** | 41.8 |
-| 4 | 71.8 | **96.6** | 44.0 | **84.9** | 24.2 |
-| 8 | wedged | **135.8** | 43.0 | **111.7** | 17.0 |
+| Streams | vLLM k=3 | exllamav3 k=3 | vLLM no draft | exllamav3 no draft |
+|---:|---:|---:|---:|---:|
+| 1, short prompts | 54.8 | **58.8** | 29.0 | **31.3** |
+| 2 | **89.4** | 87.8 | 49.1 | **54.4** |
+| 4 | **155.6** | 104.4 | 87.2 | **94.8** |
+| 8 | **157.6** | 152.0 | **153.4** | 144.0 |
+| 1, 3k prompts | 53.2 | **56.4** | 28.7 | **32.8** |
+| 2 | 79.6 | **83.1** | 46.0 | **48.2** |
+| 4 | **102.9** | 96.6 | 63.0 | **84.9** |
+| 8 | 90.5 | **135.8** | 73.1 | **111.7** |
 
 **Everything else**
 
@@ -481,11 +505,13 @@ stream's last token, median of two rounds)
 | Draft acceptance per position, k=3, 3.05 | 0.86 / 0.68 / 0.57 | 0.88 / 0.73 / 0.62 |
 
 **What the numbers say.** Single-stream decode is 8 to 20% faster on the same
-weights, prefill is the same engine speed, and concurrency keeps scaling where
-the vLLM path plateaus at two streams: 135.8 tok/s aggregate at eight streams
-with MTP against 77.9 at vLLM's best point. The per-stream rate at eight
-streams is 17 tok/s, so that is throughput for a queue, not eight interactive
-users. Memory is the other large difference: exllamav3 keeps the 30 to 36 GiB
+weights and prefill is the same engine speed. Under concurrency the two are at
+parity on short prompts (both reach 150 to 158 tok/s aggregate at eight
+streams, vLLM ahead at four with MTP), and exllamav3 pulls ahead on 3k-token
+prompts at eight streams (135.8 against 90.5), where vLLM pays more per batched
+step for long contexts. Per-stream rates at eight streams are 17 to 20 tok/s
+either way, so that is throughput for a queue, not eight interactive users.
+Memory is the other large difference: exllamav3 keeps the 30 to 36 GiB
 n-gram table on NVMe (`trellis_disk` mode) and reads it on demand, which costs
 about 1.8 s on a cold short prompt and nothing at 24k, and leaves 45 to 60 GiB
 free. The 4.05 revision is comfortable this way and marginal on vLLM. 4.05 is
@@ -560,8 +586,11 @@ separates native from the recipe is above the kernels:
   Qwen4Exp MTP proposer rather than the plugin. That is the one place a code
   change could recover measurable speed, and it needs a read of both proposers
   side by side before anyone touches it.
-- **Concurrency.** The plateau at two streams is vLLM's scheduling of this
-  model, not the kernels; the same kernels scale to eight streams natively.
+- **Concurrency.** Not a gap after all: the two-stream plateau reported
+  earlier was the window metric, and steady-state vLLM matches native at four
+  and eight streams on short prompts (see Concurrency). The 1.5.0 kernels
+  under vLLM change nothing here either (76.9 / 67.3 / 49.5 window aggregate at
+  2 / 4 / 8 streams on 3k prompts, the same as 1.4.7).
 - **The n-gram table.** A disk-backed table option in the plugin would not
   change decode speed, but it is what would let the 4.05 revision boot at 262k
   on one Spark.
@@ -759,8 +788,9 @@ head, so it is not usable yet. NVFP4 does not fit on one Spark for this model:
 - **MTP acceptance cliff at 163,840 prompt tokens.** Speculation is a 21% loss
   above it. Mechanism unknown; see the Context section for what has been ruled
   out.
-- **No scaling past two concurrent streams.** Aggregate plateaus at about 78
-  tok/s with MTP k=3 and 45 without. See Concurrency.
+- **Batched decode slows with context.** Steady-state aggregate at four
+  streams is 156 tok/s on short prompts and 103 on 3k-token prompts (MTP k=3).
+  See Concurrency.
 - **The 4.05 bpw revision does not fit at 262k**, needs util 0.92 for 131k, and leaves 2 to 3 GiB free. See The 4.05 bpw revision.
 - **Unsharded n-gram tables** (4.05 revision, newer exllamav3) are not recognised by the prep tool or loader; `scripts/rename_unsharded_ngram.py` is the workaround.
 - **Cold prefill ceiling of about 1,100 tok/s**, not improved by chunk size.
