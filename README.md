@@ -1,28 +1,49 @@
 # Qwen3.8-Flash-Next EXL3 on one NVIDIA DGX Spark
 
-Serves [turboderp's Qwen3.8-Flash-Next EXL3 pack](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3)
+Runs [turboderp's Qwen3.8-Flash-Next EXL3 pack](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3)
 (revision `3.05bpw_h5_ng5`, about 80 GB) on a single NVIDIA DGX Spark (GB10,
-128 GB unified memory, aarch64) through vLLM and the
-[vllm-exl3](https://github.com/vcruz305/vllm-exl3) plugin.
+128 GB unified memory, aarch64), two ways: through exllamav3's own engine, tuned
+for this box, and through vLLM with the [vllm-exl3](https://github.com/vcruz305/vllm-exl3)
+plugin.
 
-Measured on `cruz-spark`, 2026-09-13, vLLM 0.29.0 with vllm-exl3 0.4.2, one
-request at a time, full 262,144-token context configured:
+## Current numbers (2026-09-17)
+
+**Fastest: exllamav3 directly, [configured for GB10](#the-native-engine-tuned-for-gb10).**
+One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
+(`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
+[vcruz305/exllamav3 `42e4eac`](https://github.com/vcruz305/exllamav3/commit/42e4eac):
+
+| Prompt class | Decode tok/s | Draft acceptance |
+|---|---:|---:|
+| Code (nginx log parser) | **79** | 73% |
+| DevOps explainer + YAML | **62** | 59% |
+| Prose (350-word story) | **53** | 46% |
+| No draft, any prompt | 33 | |
+
+Repeats reproduce to ±0.3 tok/s. The two levers that carry this over the stock
+engine are stored precision and speculation: the pack's hyperconnection mixers
+ship as **fp16 inside a 3-bit model** and are now stored int8 (+7 to +13%), and
+the MTP draft runs at depth 5 with dynamic stopping on a 64K-column slice of the
+head. The [native engine section](#the-native-engine-tuned-for-gb10) has what
+each part is worth and the per-round profile; a
+[dated history](#history-of-the-native-engine-numbers) is at the bottom.
+
+**vLLM path** (2026-09-13, vLLM 0.29.0, vllm-exl3 0.4.2, full 262,144-token
+context configured), for what needs the OpenAI API, tensor parallel, or packs
+exllamav3 cannot run:
 
 | | |
 |---|---|
 | Decode, MTP k=3 | **50 to 53 tok/s** from 3k to 163k tokens of context |
 | Decode, no draft | 27 to 28 tok/s across the same range |
-| Fastest measured point | **53.1 tok/s at 163,506 tokens** |
 | Cold prefill | about 1,100 tok/s, flat from 3k to 252k |
 | Cached-prefix TTFT, 196k prompt | **1.56 s** (cold: 178.7 s) |
 | Aggregate throughput, 4 streams, MTP k=3 | **156 tok/s** steady on short prompts, 103 on 3k-token prompts |
-| exllamav3 directly, same pack, stock 1.5.0, k=3 | 58.8 tok/s one stream, 152.0 aggregate at 8 streams (vLLM: 54.8 and 157.6) |
-| exllamav3 directly, [tuned for GB10](#the-native-engine-tuned-for-gb10-2026-09-16) | **71 to 73 tok/s** on code, **46.5** on prose, one stream, greedy, through `chat.py` (78 / 47 in-process) |
 | KV pool at the default config | 416,163 tokens, 1.6x concurrency at max context |
 | 4.05 bpw at 262k, n-gram table on NVMe | boots at util 0.80, 954k-token KV pool, 41 to 48 tok/s at k=3 |
 
-Two rules that fall out of the measurements: use MTP k=3, and turn it off past
-163,840 tokens of prompt, where draft acceptance goes to exactly zero and
+Two rules that fall out of the vLLM measurements: use MTP k=3, and turn it off
+past 163,840 tokens of prompt, where draft acceptance goes to exactly zero and
 speculation becomes a 21% loss. The serve script defaults to the first and
 warns about the second.
 
@@ -40,7 +61,7 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
 ## Contents
 
 - [Quick start](#quick-start)
-- [Results, current build (2026-09-13)](#results-current-build-2026-09-13)
+- [Results, vLLM path (2026-09-13)](#results-vllm-path-2026-09-13)
   - [Draft depth](#draft-depth)
   - [Context and the MTP acceptance cliff](#context-and-the-mtp-acceptance-cliff)
   - [Prefill and prefix caching](#prefill-and-prefix-caching)
@@ -49,9 +70,10 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
   - [Levers that measured empty](#levers-that-measured-empty)
   - [The 4.05 bpw revision](#the-405-bpw-revision)
   - [Running the pack through exllamav3 directly](#running-the-pack-through-exllamav3-directly)
-    - [The native engine, tuned for GB10](#the-native-engine-tuned-for-gb10-2026-09-16)
+    - [The native engine, tuned for GB10](#the-native-engine-tuned-for-gb10)
 - [How things were measured](#how-things-were-measured)
 - [Hardware, model, memory](#hardware-model-memory)
+- [History of the native-engine numbers](#history-of-the-native-engine-numbers)
 - [Historical results (2026-09-07 and 09-08, earlier build)](#historical-results-2026-09-07-and-09-08-earlier-build)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
@@ -227,7 +249,7 @@ written to measure on this engine; see
 [How things were measured](#how-things-were-measured). Use the
 `spec_decode_num_accepted_tokens` counters from `/metrics` instead.
 
-## Results, current build (2026-09-13)
+## Results, vLLM path (2026-09-13)
 
 vLLM 0.29.0, exllamav3 1.4.7, vllm-exl3 0.4.2, `MAX_MODEL_LEN=262144
 GPU_MEM_UTIL=0.80 MAX_NUM_SEQS=4 --mamba-ssm-cache-dtype bfloat16`. Decode
@@ -540,7 +562,7 @@ it is set against the steady aggregate from the Concurrency section above)
 
 **What the numbers say.** At stock settings single-stream decode is 8 to 20%
 faster on the same weights, and with the GB10 configuration in the next
-subsection it is 71 to 73 tok/s on code against the recipe's 52, about 40%;
+subsection it is 79 tok/s on code against the recipe's 52, about 50%;
 prefill is the same engine speed. Under concurrency the two are at
 parity on short prompts (both reach 150 to 158 tok/s aggregate at eight
 streams, vLLM ahead at four with MTP), and exllamav3 pulls ahead on 3k-token
@@ -636,42 +658,46 @@ Everything else that could plausibly matter was measured empty earlier in this
 README (`max-num-seqs`, CUDA graph mode, batched-token size, fp8 KV).
 
 **Which to use.** For one user on one Spark, exllamav3 directly is the faster
-(71 to 73 tok/s on code tuned, against 52), roomier and simpler engine, and it
+(79 tok/s on code tuned, against 52), roomier and simpler engine, and it
 loads in under a minute. The vLLM path is
 for what needs vLLM: the OpenAI API with its parsers and structured output,
 tensor parallel across two Sparks, tooling that assumes a vLLM endpoint, and
 packs exllamav3 cannot run.
 
-#### The native engine, tuned for GB10 (2026-09-16)
+#### The native engine, tuned for GB10
 
 The numbers above ran exllamav3 1.5.0 with its stock defaults. This is the same
-engine at exllamav3 master (`02aef45`) from
-[my fork](https://github.com/vcruz305/exllamav3) with the aarch64 guards
-committed ([#1](https://github.com/vcruz305/exllamav3/pull/1)), configured for
-this box. `scripts/exl3_native/tuning/run-qwen38-exl3.sh` is that configuration:
+engine at [vcruz305/exllamav3 `42e4eac`](https://github.com/vcruz305/exllamav3/commit/42e4eac)
+(upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
++ the GB10 decode changes, [#2](https://github.com/vcruz305/exllamav3/pull/2)),
+configured for this box. `scripts/exl3_native/tuning/run-qwen38-exl3.sh` is that
+configuration:
 
 ```sh
-export EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1
+export EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1 EXL3_GR_INT8=1 EXL3_MTP_HEAD_N=65536 EXL3_NGRAM_STREAM=0
 taskset -c 5-9,15-19 python examples/chat.py -m $MODEL -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cs 32768
 ```
 
-**Decode, single stream, greedy, 400 new tokens** (`bench.sh`: page cache
-dropped before every load, `chat.py -tps`, so this includes console streaming;
-`sweep.py` drives the generator in-process and reads ~4 tok/s higher):
+**Decode, single stream, greedy, 400 new tokens, cold load** (`bench.sh`:
+page cache dropped before every load, `chat.py -tps -topk 1`, so this includes
+console streaming, which is the number a user sees):
 
-| Prompt | `chat.py`, cold | in-process | draft acceptance | stock 1.5.0, k=3 (above) |
-|---|---:|---:|---:|---:|
-| code (nginx log parser) | **71 to 73** | **78** | 77% | 56.4 |
-| DevOps explainer + YAML | | 56 | | |
-| prose (350-word story) | **46.5** | **47** | 51% | ~41 |
-| no draft, any prompt | | 33 | | 32.9 |
+| Prompt | tok/s | draft acceptance | stock 1.5.0, k=3 (above) |
+|---|---:|---:|---:|
+| code (nginx log parser) | **79** | 73% | 56.4 |
+| DevOps explainer + YAML | **62** | 59% | |
+| prose (350-word story) | **53** | 46% | ~41 |
+| no draft, any prompt | 33 | | 32.9 |
 
 Greedy runs reproduce to ±0.3 tok/s. The default temperature-0.8 sampler moves
-MTP acceptance 58–75% run to run and the code number with it, 60–73 on the same
-prompt; measure with `-topk 1`.
+MTP acceptance 58–75% run to run and the code number with it; measure with
+`-topk 1`. In-process harnesses (`sweep.py`, `split_time.py`) read above
+`chat.py` — about 4 tok/s for kernel changes and about 10 for host-side ones,
+because the per-token console write is itself a host sync — so only the
+`chat.py` figure is quoted here.
 
 **What the configuration does, and what each part is worth** (code prompt,
-in-process, each measured on top of the rest):
+`chat.py`, each measured on top of the rest):
 
 | | tok/s | Why |
 |---|---:|---|
@@ -679,11 +705,38 @@ in-process, each measured on top of the rest):
 | `EXL3_MOE_COOP_WIDE=1` | +5 | the fused decode MoE kernel only picks its wide 128-column, 4-way k-split tile on datacenter Blackwell by default; GB10's 48 SMs want it too |
 | `taskset -c 5-9,15-19` | +2 | GB10 pairs ten Cortex-X925 with ten A725; the launch thread lands on a little core often enough to show |
 | `-ndt 5` (from 3) | +8 | the verify forward costs 37 ms at q=2, 52 at q=5, 59 at q=7, 86 at q=9; on code, acceptance stays high enough that 5 is the peak |
-| `-dds -dc 0.6` | +3 code, **+9.5 prose** | dynamic draft length; see below |
+| `-dds -dc 0.6` | ±0 code, **+8 prose** | dynamic draft length; see below |
+| `EXL3_GR_INT8=1` | **+5 code, +7 DevOps, +4 prose** | the hyperconnection mixer weights stored int8 instead of fp16; see below |
+| `EXL3_MTP_HEAD_N=65536` | ±2 | draft argmax over a 64K-column slice of `lm_head` (105 MB) instead of the full 248K head (397 MB); 97% of drafts land in-slice, misses become rejections, verify still uses the full head. Worth 5 ms/round in-process; inside variance through `chat.py` |
 
 Env knobs that measured empty (±2): `EXL3_MOE_COOP_KSPLIT`, `EXL3_GEMV=2`,
-`EXL3_INT8_GEMV=1`, `EXL3_INT8_GEMV_MAX_K`, `EXL3_GEMV_SMEM`, `-ngr` (the n-gram
-table in RAM is slower with MTP and costs 30 GB).
+`EXL3_INT8_GEMV=1`, `EXL3_INT8_GEMV_MAX_K`, `EXL3_GEMV_SMEM`, `EXL3_GR_RB=1`
+(below), `-ngr` (the n-gram table in RAM is slower with MTP and costs 30 GB).
+
+**The mixers are fp16 in a 3-bit model.** Walking every module's tensors and
+bucketing bytes by dtype (`mixaudit.py`):
+
+| Weights | Resident |
+|---|---:|
+| `LinearEXL3` int16 trellis (the 3-bit experts and 5-bit dense) | 47.5 GB |
+| **`GatedResidual` fp16** (96 hyperconnection mixer sites + MTP) | **3.2 GB** |
+| `LinearFP16` | 0.2 GB |
+
+The quantizer had no rule for the mixers, so they stayed fp16. The fused decode
+path reads 13.2 MB per site (`fn_h` 6.6 + `upx_h` 6.6), 96 sites per round =
+1.27 GB, which is 4.6 ms at the 273 GB/s spec and measured 10.5 ms (the
+`gr_dots` grid is `(M+1, R)` and every block re-reads its weight row per
+stream; the 24 MB L2 hides that in a one-site microbench and not in the real
+round). `EXL3_GR_INT8=1` quantizes `fn_h`/`upx_h` to int8 with per-row fp32
+scales at load and frees the fp16 copies (1.6 GB back). The int8 kernels are
+the fp16 kernels with only the weight load changed — same fmaf chains, same
+reduction order, scale factored out of the k-loop — so quantization is the only
+numerical difference. Before writing them, storage precision was simulated by
+quantize→dequantize on the loaded weights (`mixq.py`): int8 and int6 kept
+greedy acceptance at the fp16 level, int4 collapsed it to 20%. Kernel parity
+against fp32 torch on the dequantized weights is 1–2e-4 (`gr_int8_parity.py`);
+greedy trajectories diverge from fp16 at token 157 / 34 / 14 on code / DevOps /
+prose (`diverge.py`) with acceptance unchanged (±0.3 pt).
 
 **Why prose is slower than code, and why `-dds` is in the launcher.**
 Per-position MTP acceptance, P(draft position *i* accepted | reached), greedy
@@ -699,41 +752,54 @@ It is all natural-language text, not "creative writing": the essay collapses
 identically. Position 0 is fed the true hidden state, so the 0.68-vs-0.91 gap
 there is the entropy of English, not the 3-bit MTP head; positions 1+ compound
 on a possibly-wrong guess. A fixed `-ndt 5` therefore has prose drafting 840
-tokens to accept 240, paying the q=6 verify for each round: 37.5 tok/s, when a
-fixed `-ndt 2` gets 46.9. Dynamic drafting stops when the running confidence
-product falls below the target and serves both: at `-dc 0.6`, code 78.1 and
-prose 47.0 (the stock `-dc 0.4`: 78.7 and 46.2). Prose's ceiling with this
-drafter is ~47; only a stronger drafter moves it. Dequantizing the MTP head
-(1.0 GB at 3 bits, ~5.5 GB in BF16, +10–15 ms/round of draft bandwidth) was
-ruled out by the position-0 numbers.
+tokens to accept 240, paying the q=6 verify for each round: 41.7 tok/s, when
+`-dds -dc 0.6` stops drafting once the running confidence product falls below
+the target and gets 53. Prose's ceiling with this drafter is the drafter;
+dequantizing the MTP head (1.0 GB at 3 bits, ~5.5 GB in BF16, +10–15 ms/round)
+was ruled out by the position-0 numbers.
 
-**Where a verify round goes** (q=6, 58 ms GPU, `kern_rounds.py`): fused MoE
-coop kernels 29%; the 5-bit `lm_head` 17%; the GatedResidual hyper-connection
-mixer 20% (113 launches per round); attention and GDN projections 14%; the
-recurrent GDN kernel 6%. Unified memory measured 215 GB/s (`bw.py`), so the
-~48 GB weight read per round is ~5 ms of the 58: decode here is launch count
-and small-kernel latency, not weight bandwidth.
+**Where a decode round goes** (q=6, ~44 ms GPU, `kern_rounds.py`, int8 mixer
+on). Decode on this pack is weight streaming: top-10 of 512 experts at 3 bits
+is ~3.7 GB per round, plus ~0.6 GB of int8 mixer, ~1.3 GB of GDN projections
+and ~0.5 GB of `lm_head`, about 6.5 GB, which is 24 ms at the 273 GB/s spec.
 
-Two things follow from that and were tried or costed:
+| Slice | ms/round | byte floor | note |
+|---|---:|---:|---|
+| fused MoE experts (`exl3_moe_coop_a/b`) | 16.5 | 13.6 | 82% of spec, ~at the ceiling |
+| hyperconnection mixer (`gr_dots/gr_finalize_i8`) | ~8.5 | 2.3 | was 10.5 at fp16; the remaining gap is the per-stream re-read |
+| GDN qkv/z projections (`exl3_mgemm`) | 7.9 | ~5 | |
+| 110 small linears (`exl3_gemm` 32×128 tile) | 4.4 | 1.0 | 40 µs each, launch-latency bound |
+| recurrent gated delta rule | 3.1 | — | |
+| `lm_head` (5 draft slices + 1 verify) | 2.9 | 3.0 | at bandwidth |
 
-- *Row-batched GatedResidual kernels* (`gr_dots_rb`/`gr_finalize_rb`, in the
-  fork behind `EXL3_GR_RB=1`, default off): stream each site's ~13 MB of
-  low-rank weights once per call instead of once per row. Parity with the fp32
-  reference identical to the originals (max rel 4.3e-4), mixer 9.1 → 7.7
-  ms/round at R=6, and **no end-to-end change** (73–78 either way over four
-  A/Bs; the accumulation order shifts greedy trajectories enough to move
-  acceptance). Kept as a negative result: a 15% win on a 20% slice does not
-  show under speculative decoding's variance.
-- *`lm_head`* is 5-bit over the 248,320-token vocabulary, 397 MB, read six
-  times per round (five draft steps plus the verify), about 11 ms of the 58 at
-  ~240 GB/s effective. Fewer bytes is the only lever: a `head_bits 3` re-quant
-  is an estimated 4 ms/round, ~7%. Not done; it would be a `vcruz305` pack
-  rather than turboderp's revision.
+An earlier version of this section concluded that "decode here is launch count
+and small-kernel latency, not weight bandwidth", from the whole 48 GB pack
+against a 215 GB/s copy figure. That was wrong: only the routed experts are
+read, the round is ~6.5 GB, and it runs at roughly 60% of spec bandwidth. The
+one slice that is launch-bound is the 110 small linears; only CUDA-graph capture
+of the decode round would move it, and it is not done.
 
-`scripts/exl3_native/tuning/` holds the launcher, `bench.sh`, and the harnesses
-(`sweep.py`, `accept.py`, `split_time.py`, `kern_rounds.py`, `bw.py`,
-`gr_parity.py`, `ab_greedy.py`) plus `gr-row-batched.patch`; its README lists
-what each does.
+Tried and kept as negative results:
+
+- *Row-batched fp16 GatedResidual kernels* (`EXL3_GR_RB=1`, default off):
+  stream each site's weights once per call instead of once per row. Parity
+  with the fp32 reference identical (max rel 4.3e-4), per-forward 49.7 → 48.7
+  ms, and **−3 tok/s end to end**: the changed fp32 reduction order shifts the
+  greedy trajectory and acceptance moved 4.17 → 3.92 tokens per round. The int8
+  kernels above keep the original reduction order for exactly this reason.
+- *Host-sync removal in the speculative loop* (batched verify, device-resident
+  draft chain, pinned MTP block table; all default on in the fork). +12 tok/s in
+  the in-process generator, inside ±2 through `chat.py`, whose per-token console
+  write is itself a sync. Kept for server callers, not counted above.
+- *A `kern_rounds.py` row that is not decode:* `exl3_moe_kernel<3,128>` shows
+  1.2 calls/round at 1.9 ms; all 119 of those calls are the single 66-row
+  prefill forward amortized over the rounds (`moepath.py`). Not a decode
+  inefficiency.
+
+`scripts/exl3_native/tuning/` holds the launcher, `bench.sh`, the A/B matrix
+scripts (`pubbench.sh`, `i8bench.sh`) with their logs under `logs/`, the
+harnesses, and the three fork commits as `patches/`; its README lists what each
+does.
 
 ## How things were measured
 
@@ -801,6 +867,21 @@ k=3, bf16 recurrent state):
   but the kernel log shows driver allocation failures during startup. Keep a
   memory watchdog running when experimenting there.
 - Cold load about 9.5 minutes from NVMe; 2.5 minutes from page cache.
+
+## History of the native-engine numbers
+
+Single stream, code prompt unless noted, `chat.py` cold greedy 400 tokens.
+Each row is the state after that day's work; the current state is at the top
+of this file.
+
+| Date | Code | DevOps | Prose | What changed |
+|---|---:|---:|---:|---|
+| **2026-09-17** | **79** | **62** | **53** | int8 GatedResidual mixer kernels (the mixers ship fp16 in a 3-bit pack; −1.6 GB, half the mixer bytes per round); pruned draft `lm_head`; bandwidth roofline corrected (round is ~6.5 GB, ~60% of spec, not launch-bound) |
+| 2026-09-16 | 71–73 | 56 | 46.5 | `-dds -dc 0.6` dynamic draft length (+9.5 prose); per-position acceptance analysis; row-batched fp16 mixer kernels tried and rejected (−3, reduction order) |
+| 2026-09-16 | 73 | | 37 | `EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1`, big-core affinity, `-ndt 5` |
+| 2026-09-16 | 63 | | 43 | `-mtp -ndt 3` on exllamav3 master with the aarch64 guards |
+| 2026-09-15 | 56.4 | | ~41 | stock exllamav3 1.5.0, `-mtp` k=3 (in-process harness, 128 tokens) |
+| 2026-09-13 | 52 | | | vLLM 0.29.0 + vllm-exl3 0.4.2, MTP k=3 — the vLLM path's number, kept for scale |
 
 ## Historical results (2026-09-07 and 09-08, earlier build)
 
@@ -979,7 +1060,7 @@ out-of-memory failure that reads like insufficient hardware.
 |---|---|
 | [turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3) | the pack this recipe serves |
 | [vllm-exl3](https://github.com/vcruz305/vllm-exl3) | the EXL3 plugin: source, releases, issues, and the pack-prep / vLLM-patch tools this recipe calls |
-| [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) | my exllamav3 fork: master = upstream + the aarch64 build guards and the opt-in row-batched GatedResidual kernels ([#1](https://github.com/vcruz305/exllamav3/pull/1)); what the native-engine tuning numbers were measured on |
+| [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) | my exllamav3 fork: master = upstream + the aarch64 build guards ([#1](https://github.com/vcruz305/exllamav3/pull/1)) + the GB10 decode changes: int8 GatedResidual mixer kernels, pruned draft `lm_head`, MTP host-sync removal ([#2](https://github.com/vcruz305/exllamav3/pull/2)); what the native-engine numbers were measured on |
 | [GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe](https://github.com/vcruz305/GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe) | sibling recipe this one is modeled on |
 | [DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe](https://github.com/vcruz305/DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe) | sibling recipe this one is modeled on |
 
