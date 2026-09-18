@@ -11,7 +11,7 @@ plugin.
 **Fastest: exllamav3 directly, [configured for GB10](#the-native-engine-tuned-for-gb10).**
 One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 (`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
-[vcruz305/exllamav3 `42e4eac`](https://github.com/vcruz305/exllamav3/commit/42e4eac):
+[vcruz305/exllamav3 `523ecd3`](https://github.com/vcruz305/exllamav3/commit/523ecd3):
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
@@ -19,8 +19,12 @@ One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 | DevOps explainer + YAML | **62** | 59% |
 | Prose (350-word story) | **53** | 46% |
 | No draft, any prompt | 33 | |
+| Code, **240k tokens of context** in the prompt | **72** (fp16 KV: 65) | 71% |
 
-Repeats reproduce to ±0.3 tok/s. The two levers that carry this over the stock
+Repeats reproduce to ±0.3 tok/s. The launcher runs the full **262,144-token
+context** with 8-bit KV; that is the model's trained window and the measured
+ceiling — needle retrieval is exact at 240k and fails at 300k — and decode
+loses nothing to depth at 8-bit KV (see [context](#context-the-ceiling-and-8-bit-kv)). The two levers that carry this over the stock
 engine are stored precision and speculation: the pack's hyperconnection mixers
 ship as **fp16 inside a 3-bit model** and are now stored int8 (+7 to +13%), and
 the MTP draft runs at depth 5 with dynamic stopping on a 64K-column slice of the
@@ -667,15 +671,16 @@ packs exllamav3 cannot run.
 #### The native engine, tuned for GB10
 
 The numbers above ran exllamav3 1.5.0 with its stock defaults. This is the same
-engine at [vcruz305/exllamav3 `42e4eac`](https://github.com/vcruz305/exllamav3/commit/42e4eac)
+engine at [vcruz305/exllamav3 `523ecd3`](https://github.com/vcruz305/exllamav3/commit/523ecd3)
 (upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
-+ the GB10 decode changes, [#2](https://github.com/vcruz305/exllamav3/pull/2)),
++ the GB10 decode changes, [#2](https://github.com/vcruz305/exllamav3/pull/2),
+[#3](https://github.com/vcruz305/exllamav3/pull/3)),
 configured for this box. `scripts/exl3_native/tuning/run-qwen38-exl3.sh` is that
 configuration:
 
 ```sh
 export EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1 EXL3_GR_INT8=1 EXL3_MTP_HEAD_N=65536 EXL3_NGRAM_STREAM=0
-taskset -c 5-9,15-19 python examples/chat.py -m $MODEL -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cs 32768
+taskset -c 5-9,15-19 python examples/chat.py -m $MODEL -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cq 8,8 -cs 262144
 ```
 
 **Decode, single stream, greedy, 400 new tokens, cold load** (`bench.sh`:
@@ -708,6 +713,7 @@ because the per-token console write is itself a host sync — so only the
 | `-dds -dc 0.6` | ±0 code, **+8 prose** | dynamic draft length; see below |
 | `EXL3_GR_INT8=1` | **+5 code, +7 DevOps, +4 prose** | the hyperconnection mixer weights stored int8 instead of fp16; see below |
 | `EXL3_MTP_HEAD_N=65536` | ±2 | draft argmax over a 64K-column slice of `lm_head` (105 MB) instead of the full 248K head (397 MB); 97% of drafts land in-slice, misses become rejections, verify still uses the full head. Worth 5 ms/round in-process; inside variance through `chat.py` |
+| `-cq 8,8` | **+3 at 4k, +7 at 240k** | 8-bit KV. The 12 full-attention layers stream the whole KV every decode step, 5.9 GB per step at 240k in fp16; halving it is faster at every depth with acceptance unchanged, and 12 GB less KV at the full context. See below |
 
 Env knobs that measured empty (±2): `EXL3_MOE_COOP_KSPLIT`, `EXL3_GEMV=2`,
 `EXL3_INT8_GEMV=1`, `EXL3_INT8_GEMV_MAX_K`, `EXL3_GEMV_SMEM`, `EXL3_GR_RB=1`
@@ -757,6 +763,50 @@ tokens to accept 240, paying the q=6 verify for each round: 41.7 tok/s, when
 the target and gets 53. Prose's ceiling with this drafter is the drafter;
 dequantizing the MTP head (1.0 GB at 3 bits, ~5.5 GB in BF16, +10–15 ms/round)
 was ruled out by the position-0 numbers.
+
+##### Context: the ceiling, and 8-bit KV
+
+KV on this geometry is cheap: 12 of
+the 48 layers are full attention with 2 KV heads at head_dim 256, so a token
+costs 24 KB fp16 (12 KB at `-cq 8,8`), 6 GiB for the whole 262,144 window.
+Every cache size tried loads and decodes — `-cs 524288` fp16 and `-cs 1048576`
+at 8-bit both run at 71 tok/s on a short prompt — so memory is not what caps
+context. The trained window is. Needle test (`ctxfill.py`: a random code planted
+at a random depth in a prompt built to a token target, `Generator`-driven since
+`chat.py -prompt` dies at 128 KiB of argv):
+
+| Prompt tokens | fp16 KV | 8-bit KV | peak host memory |
+|---:|---|---|---:|
+| 32k / 128k / 240k | hit / hit / hit | hit | 102 / 106 / 110 GiB |
+| 300k | miss | miss | 112 GiB |
+| 480k, two needle positions | miss / miss | **hit** / miss | 118 GiB |
+
+Every run inside 262,144 retrieves the code exactly; every run past it fails
+the same way (the model emits `<|im_end|>` and starts a new turn about "the user
+is asking me to reveal a secret") at both KV precisions, so it is positional,
+not precision. The one 480k hit did not survive a second needle position. Host
+memory would have been the next wall anyway — 118 of 121 GiB at 480k fp16, the
+recurrent GDN history plus cache — so the two ceilings coincide. **The launcher
+runs `-cs 262144`.**
+
+Decode at depth, 400 new tokens of a code task placed after the documents
+(in-process, same harness both columns, so the pair is clean; it sits under the
+`chat.py` headline because the code prompt follows 240k tokens of unrelated
+text):
+
+| Context in prompt | fp16 KV | **8-bit KV** | prefill |
+|---:|---:|---:|---:|
+| 4k | 66.6 | **69.8** | ~900 tok/s |
+| 128k | 66.6 | **69.5** | 1,150 |
+| 240k | 65.1 | **72.0** | 1,140 |
+
+fp16 loses 2% to depth at 240k; 8-bit loses nothing, and the margin grows with
+context as the byte math says it should. Acceptance is unchanged (69% vs 71% at
+240k). Prefill is flat at ~1,150 tok/s out to 480k (7 minutes for 480k). A
+32-token needle answer at 240k read 104 tok/s at 8-bit; that number is not
+quotable — the first speculative chunk lands in TTFT and a repetitive
+`<|im_end|>` tail drafts perfectly — which is why the depth table is 400 tokens
+of real generation.
 
 **Where a decode round goes** (q=6, ~44 ms GPU, `kern_rounds.py`, int8 mixer
 on). Decode on this pack is weight streaming: top-10 of 512 experts at 3 bits
@@ -876,7 +926,8 @@ of this file.
 
 | Date | Code | DevOps | Prose | What changed |
 |---|---:|---:|---:|---|
-| **2026-09-17** | **79** | **62** | **53** | int8 GatedResidual mixer kernels (the mixers ship fp16 in a 3-bit pack; −1.6 GB, half the mixer bytes per round); pruned draft `lm_head`; bandwidth roofline corrected (round is ~6.5 GB, ~60% of spec, not launch-bound) |
+| **2026-09-17** | **79** | **62** | **53** | 8-bit KV in the launcher (`-cq 8,8`: +3 at 4k, +7 at 240k, 12 GB less KV) at the full 262,144 context; ceiling measured — needle exact at 240k, fails at 300k/480k, memory wall at ~480k |
+| 2026-09-17 | 79 | 62 | 53 | int8 GatedResidual mixer kernels (the mixers ship fp16 in a 3-bit pack; −1.6 GB, half the mixer bytes per round); pruned draft `lm_head`; bandwidth roofline corrected (round is ~6.5 GB, ~60% of spec, not launch-bound) |
 | 2026-09-16 | 71–73 | 56 | 46.5 | `-dds -dc 0.6` dynamic draft length (+9.5 prose); per-position acceptance analysis; row-batched fp16 mixer kernels tried and rejected (−3, reduction order) |
 | 2026-09-16 | 73 | | 37 | `EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1`, big-core affinity, `-ndt 5` |
 | 2026-09-16 | 63 | | 43 | `-mtp -ndt 3` on exllamav3 master with the aarch64 guards |
