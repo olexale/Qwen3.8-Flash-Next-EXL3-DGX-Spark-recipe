@@ -2,7 +2,7 @@
 
 Companion to the README section "The native engine, tuned for GB10". Everything here runs
 against a source build of [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) `master`
-(`42e4eac`: upstream + aarch64 guards + the GB10 decode changes in `patches/`) at `~/exllamav3`
+(`523ecd3`: upstream + aarch64 guards + the GB10 decode changes in `patches/`, int8 mixer default on) at `~/exllamav3`
 with its venv at `~/exllamav3/.venv`, and the pack at `~/models/Qwen3.8-Flash-Next-EXL3/`.
 Adjust the paths at the top of each script if yours differ.
 
@@ -15,11 +15,15 @@ ones (the console write per token is itself a host sync).
 
 | File | What |
 |---|---|
-| `run-qwen38-exl3.sh` | The launcher. Drops the model's page cache, sets the GB10 env (`EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1 EXL3_GR_INT8=1 EXL3_MTP_HEAD_N=65536 EXL3_NGRAM_STREAM=0`), pins to the ten X925 cores, runs `chat.py -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cs 32768 -tps`. Extra args pass through. |
+| `run-qwen38-exl3.sh` | The launcher. Drops the model's page cache, sets the GB10 env (`EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1 EXL3_GR_INT8=1 EXL3_MTP_HEAD_N=65536 EXL3_NGRAM_STREAM=0`), pins to the ten X925 cores, runs `chat.py -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cq 8,8 -cs 262144 -tps`. `CS=32768` for a smaller cache; extra args pass through. |
 | `bench.sh <tag> [chat.py flags]` | One cold greedy 400-token generation through `chat.py`, prints load time and the `Context:` line with tok/s and acceptance. `PROMPT="..."` overrides the prompt. Logs to `~/bench_<tag>.log`. **The number to quote.** |
 | `pubbench.sh` | The 12-cell matrix behind the README table: 3 prompt classes × {host patches on, off} × {`-ndt 5`, `-dds -dc 0.6`}, unattended (`setsid nohup bash pubbench.sh > pubbench.log &`). |
 | `i8bench.sh` | int8 mixer on/off × 3 prompt classes with repeats, same path. |
-| `logs/` | The raw `chat.py` logs and summaries from the two matrices above, 2026-09-17. |
+| `ctxsweep.sh` | Load ceiling: cold load at `-cs` 32k…1M (fp16 and `-cq 8,8`), short prompt, reports load result and decode. Everything loads. |
+| `ctxfill.py` | The context harness. Builds a prompt to a TOKEN target (`K=240` thousand), plants a needle at a random depth (`SEED`), drives `Generator`/`Job` (chat.py's `-prompt` dies at 128 KiB argv). `TASK=needle NEW=32` for retrieval, `TASK=code NEW=400` for decode-at-depth. `CS=` overrides the cache size, `CQ=8,8` for quantized KV. Reports prompt tokens, prefill and decode t/s, acceptance, hit/miss, peak host memory. |
+| `fillsweep.sh`, `fillsweep2.sh` | The needle sweeps: 32k → 480k, both KV precisions, two needle positions at 480k. |
+| `depthab.sh` | The decode-at-depth A/B: 400 tokens of code at 4k / 128k / 240k, fp16 vs 8-bit KV. |
+| `logs/` | Raw logs and summaries from every matrix above, 2026-09-17; `ctx_runs_summary.txt` is every context run on one page. |
 | `drop-model-cache.sh` | `posix_fadvise(DONTNEED)` on every pack file. On GB10 page cache is GPU-allocatable memory; without this the autosplit loader refuses to load after any large file write. Sleep ≥8 s between back-to-back loads or the second dies to a workspace race. |
 
 ## Harnesses
@@ -47,6 +51,6 @@ three commits, already merged into `master`:
 
 | | Flag | Default |
 |---|---|---|
-| `0001` int8 GatedResidual mixer kernels | `EXL3_GR_INT8=1` | off in the fork, **on in the launcher** |
+| `0001` int8 GatedResidual mixer kernels | `EXL3_GR_INT8` (`0` disables) | on (since fork [#3](https://github.com/vcruz305/exllamav3/pull/3)) |
 | `0002` pruned draft `lm_head` | `EXL3_MTP_HEAD_N=65536` (`0` disables) | on |
 | `0003` batched verify, device-resident draft chain, pinned MTP block table | `EXL3_BATCH_VERIFY`, `EXL3_MTP_DEVICE_DRAFT`, `EXL3_EMBED_GPU` | on |
