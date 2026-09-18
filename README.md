@@ -19,9 +19,12 @@ One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 | DevOps explainer + YAML | **62** | 59% |
 | Prose (350-word story) | **53** | 46% |
 | No draft, any prompt | 33 | |
-| Code, **240k tokens of context** in the prompt | **72** (fp16 KV: 65) | 71% |
+| Code, **240k tokens of context** in the prompt† | **72** (fp16 KV: 65) | 71% |
 
-Repeats reproduce to ±0.3 tok/s. The launcher runs the full **262,144-token
+Repeats reproduce to ±0.3 tok/s. †The 240k row is from the in-process `Generator`
+harness (`ctxfill.py`), the only way to feed a 240k prompt; the same harness
+reads 66.6 at 4k where `chat.py` reads 79, so compare it to its own fp16 column,
+not to the rows above. The launcher runs the full **262,144-token
 context** with 8-bit KV; that is the model's trained window and the measured
 ceiling — needle retrieval is exact at 240k and fails at 300k — and decode
 loses nothing to depth at 8-bit KV (see [context](#context-the-ceiling-and-8-bit-kv)). The two levers that carry this over the stock
