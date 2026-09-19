@@ -16,6 +16,7 @@ ones (the console write per token is itself a host sync).
 | File | What |
 |---|---|
 | `run-qwen38-exl3.sh` | The launcher. Drops the model's page cache, sets the GB10 env (`EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1 EXL3_GR_INT8=1 EXL3_MTP_HEAD_N=65536 EXL3_NGRAM_STREAM=0`), pins to the ten X925 cores, runs `chat.py -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cq 8,8 -cs 262144 -tps`. `CS=32768` for a smaller cache; extra args pass through. |
+| `../serve_openai.sh` | Same GB10 env and flags, OpenAI `/v1` on port 8899 (`HOST`/`PORT` override). Qwen XML → `tool_calls`. Stops on `<|im_start|>` as well as `<|im_end|>`. One Generator job at a time. |
 | `bench.sh <tag> [chat.py flags]` | One cold greedy 400-token generation through `chat.py`, prints load time and the `Context:` line with tok/s and acceptance. `PROMPT="..."` overrides the prompt. Logs to `~/bench_<tag>.log`. **The number to quote.** |
 | `pubbench.sh` | The 12-cell matrix behind the README table: 3 prompt classes × {host patches on, off} × {`-ndt 5`, `-dds -dc 0.6`}, unattended (`setsid nohup bash pubbench.sh > pubbench.log &`). |
 | `i8bench.sh` | int8 mixer on/off × 3 prompt classes with repeats, same path. |

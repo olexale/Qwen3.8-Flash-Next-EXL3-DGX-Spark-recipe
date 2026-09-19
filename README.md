@@ -586,13 +586,21 @@ still no faster than 3.05 (54.3 against 56.4 at k=3).
 Python generator driven in-process, and that is the honest scope of the
 comparison:
 
-- No OpenAI-compatible API in what was measured. exllamav3 is normally served
-  through [TabbyAPI](https://github.com/theroyallab/tabbyAPI); its overhead and
-  its feature set on this model were not measured here, and the concurrency
-  numbers above are for jobs enqueued directly on the generator.
-- No reasoning parser, tool-call parser, structured output or the rest of
-  vLLM's serving surface. Clients that expect `--reasoning-parser qwen3` and
-  hermes tool calls get raw text.
+- No OpenAI-compatible API in the original `chat.py` / `bench_native.py`
+  numbers. TabbyAPI is still unmeasured here. There is now a thin `/v1` wrapper
+  on the same Generator: `scripts/exl3_native/serve_openai.sh` (default port
+  8899). It uses the GB10 launcher knobs, parses Qwen3 `<function=…>` XML into
+  OpenAI `tool_calls`, and treats `<|im_start|>` as a stop (`qwen35` otherwise
+  only stops on `<|im_end|>`, which can leak as the whole reply). One job at a
+  time — this is not vLLM C4. Measured 2026-09-20 on `523ecd3`: greedy 400-token
+  code **79.5** wall tok/s / **83.8** engine / **74%** accept (matches the
+  `chat.py` 79). A Nous Hermes tool loop at ~80k prompt survived; the vLLM
+  overlay on this pack died on the second generate (`CUBLAS_STATUS_INTERNAL_ERROR`
+  on inductor `mm` shape 10240×336).
+- No vLLM reasoning parser / structured output on the native path. The wrapper
+  is Chat Completions + XML tools only. For vLLM, `serve_one_spark_qwen.sh` now
+  passes `--enable-auto-tool-choice --tool-call-parser qwen3_xml` (this model
+  emits Qwen XML, not Hermes JSON; see the GGUF sixcat tools row).
 - No tensor parallel across two Sparks (exllamav3's TP path is one of the x86
   code paths the aarch64 patch stubs out).
 - Prefix caching was not measured natively. exllamav3's generator has cache
