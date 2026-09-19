@@ -704,6 +704,25 @@ MTP acceptance 58–75% run to run and the code number with it; measure with
 because the per-token console write is itself a host sync — so only the
 `chat.py` figure is quoted here.
 
+**If you are serving rather than watching a console, the same configuration is
+faster.** `chat.py -tps` writes every token to the terminal, and that write is
+a host sync; an API server or agent loop does not do it. The identical stack
+driven through `Generator`/`Job` with no per-token console write
+(`silent_ceil.py`, greedy, 400 new tokens, cold load, `-cq 8,8`):
+
+| Prompt | `chat.py` (above) | no console streaming |
+|---|---:|---:|
+| code | 79 | **85** |
+| DevOps | 62 | **70** |
+| prose | 53 | **55** |
+
+Both columns are real and they answer different questions. The `chat.py` column
+is what an interactive user sees, and it is what the rest of this README
+quotes. The right-hand column is what a server on this box should reach, and it
+is the measured ceiling for this pack on a single stream — the levers that were
+tried to pass it are listed under [what is closed](#levers-that-are-closed-native-engine)
+below.
+
 **What the configuration does, and what each part is worth** (code prompt,
 `chat.py`, each measured on top of the rest):
 
@@ -828,9 +847,85 @@ and ~0.5 GB of `lm_head`, about 6.5 GB, which is 24 ms at the 273 GB/s spec.
 An earlier version of this section concluded that "decode here is launch count
 and small-kernel latency, not weight bandwidth", from the whole 48 GB pack
 against a 215 GB/s copy figure. That was wrong: only the routed experts are
-read, the round is ~6.5 GB, and it runs at roughly 60% of spec bandwidth. The
-one slice that is launch-bound is the 110 small linears; only CUDA-graph capture
-of the decode round would move it, and it is not done.
+read, the round is ~6.5 GB, and it runs at roughly 60% of spec bandwidth.
+
+The 110 small linears are **not** launch-bound either, which corrects a second
+claim this section used to make ("only CUDA-graph capture of the decode round
+would move it"). exllamav3's extension already captures the GDN and attention
+linear chains into per-`(bsz, seqlen)` CUDA graphs (the ext `Graph` class,
+`BC_LinearEXL3`, `exl3_gemm_gr`), so those 40 µs entries are GPU execution
+time, not launch overhead — the profiler lists them because it times the
+kernels *inside* the graph. Wrapping `model.forward` in a further
+`torch.cuda.CUDAGraph` aborts at capture (`operation not permitted when stream
+is capturing`, nested capture). There is no launch-overhead lever left in this
+row.
+
+##### Levers that are closed (native engine)
+
+Everything in this list was measured on the `523ecd3` stack, at the launcher's
+configuration, and none of it is shipped. It is here so nobody spends the same
+days twice.
+
+- **Deeper speculation (`-ndt` 6, 7, 8).** An older note in this repo said
+  `-ndt >= 6` exhausted memory; 8-bit KV removed that, and all of them now run.
+  They still do not pay, because `-dds` already truncates the draft window by
+  confidence (silent harness, code prompt):
+
+  | `-ndt` | tok/s | tokens/round | acceptance |
+  |---:|---:|---:|---:|
+  | **5** | **85.7** | 4.12 | 75.2% |
+  | 6 | 82.5 | 3.81 | 70.7% |
+  | 7 | 86.0 | 4.35 | 67.4% |
+  | 8 | 77.9 | 4.55 | 66.4% |
+
+  Tokens per round barely move while acceptance rots; `-ndt 7` is inside
+  variance of `-ndt 5`. Depth is not a lever on this drafter.
+
+- **Restructuring the mixer to stop re-reading streams.** The `gr_dots` grid is
+  `(M+1, R)`, so each of 325 blocks re-reads a whole 40 KB stream: at R=6 that
+  is ~80 MB of traffic against 3.3 MB of weights. Sweeping R and fitting
+  `intercept + slope × R` per call localises it — the slope is L2 bandwidth
+  (13 MB / 6.5 µs ≈ 1.9 TB/s). Two rewrites removed that traffic and both are
+  numerically exact against an fp32 reference on the dequantized weights, and
+  both are **slower** at this R:
+
+  | variant | blocks | fit (µs) | R=6 |
+  |---|---|---|---:|
+  | shipped, one row per block | 325 × R | `8.2 + 6.17R` | **44.8 µs** |
+  | contraction-tiled (k-chunks + partials) | 240 | `19.2 + 4.87R` | 46.8 µs |
+  | row-blocked, 8 rows per block | 41 × R | `25.0 + 4.33R` | 47.1 µs |
+
+  The slope falls exactly as the traffic model predicts, but the intercept
+  tracks block count, and on a ~45 µs op a 48-SM part punishes starved
+  parallelism harder than it rewards saved bandwidth. Both cross over only near
+  **R ≈ 9**, and R is `ndt + 1 = 6`. Cutting the per-block stream re-read needs
+  coarser blocks; filling the SMs needs ≥ ~300 blocks; at R=6 you cannot have
+  both. Fit both terms and solve for the crossover before writing the kernel.
+
+- **CUDA-graph capture of the decode round.** Already done inside the engine —
+  see the paragraph above the negative-results list. Not a lever.
+
+- **N-gram assist alongside MTP.** Mutually exclusive: `Generator` asserts
+  `not ngram_match_min` when a draft model is set, so n-gram drafting replaces
+  the MTP head rather than assisting it. On novel code, a 75%-acceptance MTP
+  head is the better drafter.
+
+- **A dequant-once MoE kernel — premise withdrawn, size unmeasured.** The fused
+  expert kernel costs ~linearly in verify rows (0.127 ms at m=1 to 0.704 ms at
+  m=8 for one layer), which looks like per-row re-dequantization of the same
+  trellis and therefore like an easy 11 ms/round. It is not that: unique
+  experts touched scale nearly 1:1 with rows (10, 20, 39, 56, 70 at
+  m = 1, 2, 4, 6, 8), so the linearity is largely genuine distinct-weight
+  traffic — with topk=10 of 512, each candidate token pulls its own expert set.
+  That is also the real reason MTP verify is expensive on a fine-grained MoE,
+  and why speculation tops out near 2× here however good acceptance gets.
+  Caveat on that measurement: it used random hidden states, which route
+  near-uniformly, and it read 28.3 ms ×48 layers at m=6 against ~16.5 ms in
+  situ — so real routing overlaps more than random and the honest statement is
+  that the *premise* for the rewrite was wrong, not that the remaining overlap
+  is exactly zero. Sizing it properly needs an in-situ unique-expert census on
+  real hidden states; that has not been published here. Do not size an
+  expert-path bandwidth claim from a random-input microbench.
 
 Tried and kept as negative results:
 
