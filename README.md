@@ -43,20 +43,20 @@ each part is worth and the per-round profile; a
 
 > **Hardware:** NVIDIA RTX PRO 6000 Blackwell Server Edition — 96 GB HBM3e, discrete GPU, x86_64 host (EPYC).
 
-Same engine ([vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)),
+Same engine ([vcruz305/exllamav3 `5e0ba47`](https://github.com/vcruz305/exllamav3/commit/5e0ba47)),
 different pack: [4.53 bpw mixed-K](https://huggingface.co/vcruz305/BLACKFROST-3.8-DERISKED-EXL3-4.53bpw_h8_ng8)
 (head K8, per-expert mixed K3–K6). One stream, greedy, 400 new tokens, warm,
-MTP ndt=5, int8 mixer, Q8 KV, per-K-group fused MoE dispatch:
+MTP ndt=5, int8 mixer, Q8 KV, per-expert mixed-K MoE kernel:
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
-| Code (nginx log parser) | **60** | 68% |
-| DevOps explainer + YAML | **54** | 65% |
-| Prose (350-word story) | **55** | 61% |
+| Code (nginx log parser) | **95** | 56% |
+| DevOps explainer + YAML | **76** | 39% |
+| Prose (350-word story) | **68** | 33% |
 
 The 4.53 bpw pack loads in ~73 GiB CUDA, leaving ~23 GiB free on the 96 GB card.
-The per-K-group fused MoE dispatch (`785f206`) is what makes the mixed-K pack
-competitive — without it, per-expert Python dispatch runs at ~38 tok/s.
+The per-expert mixed-K kernel (`5e0ba47`) is what makes the mixed-K pack
+competitive — the per-K-group dispatch (`785f206`) ran at ~60 tok/s, and per-expert Python dispatch at ~38 tok/s.
 
 
 ### 🔧 vLLM Path (Secondary)
