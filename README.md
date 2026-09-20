@@ -10,6 +10,8 @@ plugin.
 
 ### ⚡ ExLlamaV3 Native Engine (Primary)
 
+> **Hardware:** NVIDIA DGX Spark — GB10 SoC, 128 GB unified memory, aarch64, Grace CPU (10 big + 10 little cores).
+
 **Fastest path.** [Configured for GB10](#the-native-engine-tuned-for-gb10).
 One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 (`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
@@ -39,6 +41,8 @@ each part is worth and the per-round profile; a
 
 ### 🔧 vLLM Path (Secondary)
 
+> Same hardware as above (single DGX Spark, GB10, 128 GB).
+
 (2026-09-13, vLLM 0.29.0, vllm-exl3 0.4.2, full 262,144-token
 context configured), for what needs the OpenAI API, tensor parallel, or packs
 exllamav3 cannot run:
