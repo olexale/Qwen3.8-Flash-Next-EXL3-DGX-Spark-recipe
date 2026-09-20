@@ -11,7 +11,7 @@ plugin.
 **Fastest: exllamav3 directly, [configured for GB10](#the-native-engine-tuned-for-gb10).**
 One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 (`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
-[vcruz305/exllamav3 `523ecd3`](https://github.com/vcruz305/exllamav3/commit/523ecd3):
+[vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206):
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
@@ -592,7 +592,7 @@ comparison:
   8899). It uses the GB10 launcher knobs, parses Qwen3 `<function=…>` XML into
   OpenAI `tool_calls`, and treats `<|im_start|>` as a stop (`qwen35` otherwise
   only stops on `<|im_end|>`, which can leak as the whole reply). One job at a
-  time — this is not vLLM C4. Measured 2026-09-20 on `523ecd3`: greedy 400-token
+  time — this is not vLLM C4. Measured 2026-09-20 on `785f206`: greedy 400-token
   code **79.5** wall tok/s / **83.8** engine / **74%** accept (matches the
   `chat.py` 79). A Nous Hermes tool loop at ~80k prompt survived; the vLLM
   overlay on this pack died on the second generate (`CUBLAS_STATUS_INTERNAL_ERROR`
@@ -682,7 +682,7 @@ packs exllamav3 cannot run.
 #### The native engine, tuned for GB10
 
 The numbers above ran exllamav3 1.5.0 with its stock defaults. This is the same
-engine at [vcruz305/exllamav3 `523ecd3`](https://github.com/vcruz305/exllamav3/commit/523ecd3)
+engine at [vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)
 (upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
 + the GB10 decode changes, [#2](https://github.com/vcruz305/exllamav3/pull/2),
 [#3](https://github.com/vcruz305/exllamav3/pull/3)),
@@ -870,7 +870,7 @@ row.
 
 ##### Levers that are closed (native engine)
 
-Everything in this list was measured on the `523ecd3` stack, at the launcher's
+Everything in this list was measured on the `785f206` stack, at the launcher's
 configuration, and none of it is shipped. It is here so nobody spends the same
 days twice.
 

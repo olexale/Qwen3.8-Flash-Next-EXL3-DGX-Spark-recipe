@@ -21,7 +21,10 @@ from urllib.parse import urlparse
 
 EXL3_ROOT = Path(os.environ.get("EXL3_ROOT", os.path.expanduser("~/exllamav3")))
 sys.path.insert(0, str(EXL3_ROOT))
-sys.path.insert(0, str(EXL3_ROOT / "examples"))
+# chat_templates lives in exllamav3/examples/ — add it regardless of cwd
+_examples = EXL3_ROOT / "examples"
+if str(_examples) not in sys.path:
+    sys.path.insert(0, str(_examples))
 
 import torch  # noqa: E402
 from exllamav3 import Generator, Job, model_init  # noqa: E402

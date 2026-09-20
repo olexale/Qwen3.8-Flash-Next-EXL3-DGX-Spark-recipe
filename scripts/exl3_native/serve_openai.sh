@@ -3,7 +3,7 @@
 # Default port 8899, same as scripts/serve_one_spark_qwen.sh.
 # One Generator job at a time — this is chat.py's engine, not vLLM C4.
 #
-# Measured 2026-09-20 on one GB10, vcruz305/exllamav3 523ecd3:
+# Measured 2026-09-20 on one GB10, vcruz305/exllamav3 785f206:
 #   greedy 400-token code job: 79.5 wall tok/s, 83.8 engine, 74% draft accept
 #   (matches the README chat.py 79 / 73%). Nous Hermes tool loop at ~80k
 #   prompt survived; the vLLM overlay on this pack died on the 2nd generate
