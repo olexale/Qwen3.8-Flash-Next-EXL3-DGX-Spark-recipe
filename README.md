@@ -39,6 +39,26 @@ head. The [native engine section](#the-native-engine-tuned-for-gb10) has what
 each part is worth and the per-round profile; a
 [dated history](#history-of-the-native-engine-numbers) is at the bottom.
 
+#### Also tested: RTX PRO 6000 Blackwell (96 GB HBM3e)
+
+> **Hardware:** NVIDIA RTX PRO 6000 Blackwell Server Edition — 96 GB HBM3e, discrete GPU, x86_64 host (EPYC).
+
+Same engine ([vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)),
+different pack: [4.53 bpw mixed-K](https://huggingface.co/vcruz305/BLACKFROST-3.8-DERISKED-EXL3-4.53bpw_h8_ng8)
+(head K8, per-expert mixed K3–K6). One stream, greedy, 400 new tokens, warm,
+MTP ndt=5, int8 mixer, Q8 KV, per-K-group fused MoE dispatch:
+
+| Prompt class | Decode tok/s | Draft acceptance |
+|---|---:|---:|
+| Code (nginx log parser) | **60** | 68% |
+| DevOps explainer + YAML | **54** | 65% |
+| Prose (350-word story) | **55** | 61% |
+
+The 4.53 bpw pack loads in ~73 GiB CUDA, leaving ~23 GiB free on the 96 GB card.
+The per-K-group fused MoE dispatch (`785f206`) is what makes the mixed-K pack
+competitive — without it, per-expert Python dispatch runs at ~38 tok/s.
+
+
 ### 🔧 vLLM Path (Secondary)
 
 > Same hardware as above (single DGX Spark, GB10, 128 GB).
