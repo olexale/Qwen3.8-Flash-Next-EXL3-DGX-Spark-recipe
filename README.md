@@ -8,7 +8,9 @@ plugin.
 
 ## Current numbers (2026-09-17)
 
-**Fastest: exllamav3 directly, [configured for GB10](#the-native-engine-tuned-for-gb10).**
+### ⚡ ExLlamaV3 Native Engine (Primary)
+
+**Fastest path.** [Configured for GB10](#the-native-engine-tuned-for-gb10).
 One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 (`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
 [vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206):
@@ -35,7 +37,9 @@ head. The [native engine section](#the-native-engine-tuned-for-gb10) has what
 each part is worth and the per-round profile; a
 [dated history](#history-of-the-native-engine-numbers) is at the bottom.
 
-**vLLM path** (2026-09-13, vLLM 0.29.0, vllm-exl3 0.4.2, full 262,144-token
+### 🔧 vLLM Path (Secondary)
+
+(2026-09-13, vLLM 0.29.0, vllm-exl3 0.4.2, full 262,144-token
 context configured), for what needs the OpenAI API, tensor parallel, or packs
 exllamav3 cannot run:
 
