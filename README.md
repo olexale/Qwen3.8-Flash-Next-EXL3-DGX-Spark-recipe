@@ -11,7 +11,7 @@ plugin.
 **Fastest: exllamav3 directly, [configured for GB10](#the-native-engine-tuned-for-gb10).**
 One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 (`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
-[vcruz305/exllamav3 `523ecd3`](https://github.com/vcruz305/exllamav3/commit/523ecd3):
+[vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206):
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
@@ -67,8 +67,15 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [Results, vLLM path (2026-09-13)](#results-vllm-path-2026-09-13)
+- [Current numbers](#current-numbers-2026-09-17)
+- [Which to use](#which-to-use)
+- [Quick start: exllamav3 native](#quick-start-exllamav3-native)
+- [Quick start: vLLM path](#quick-start-vllm-path)
+- [Benchmarks: exllamav3 native](#benchmarks-exllamav3-native)
+  - [Stock exllamav3 1.5.0 vs vLLM](#stock-exllamav3-150-vs-vllm)
+  - [Can the plugin get there?](#can-the-plugin-get-there)
+  - [The native engine, tuned for GB10](#the-native-engine-tuned-for-gb10)
+- [Benchmarks: vLLM path (2026-09-13)](#benchmarks-vllm-path-2026-09-13)
   - [Draft depth](#draft-depth)
   - [Context and the MTP acceptance cliff](#context-and-the-mtp-acceptance-cliff)
   - [Prefill and prefix caching](#prefill-and-prefix-caching)
@@ -76,8 +83,6 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
   - [Concurrency](#concurrency)
   - [Levers that measured empty](#levers-that-measured-empty)
   - [The 4.05 bpw revision](#the-405-bpw-revision)
-  - [Running the pack through exllamav3 directly](#running-the-pack-through-exllamav3-directly)
-    - [The native engine, tuned for GB10](#the-native-engine-tuned-for-gb10)
 - [How things were measured](#how-things-were-measured)
 - [Hardware, model, memory](#hardware-model-memory)
 - [History of the native-engine numbers](#history-of-the-native-engine-numbers)
@@ -86,7 +91,81 @@ inference. Source and local-render notes are in [docs/README.md](docs/README.md)
 - [Troubleshooting](#troubleshooting)
 - [Related repositories, credits, license](#related-repositories)
 
-## Quick start
+## Which to use
+
+For one user on one Spark, **exllamav3 directly is the faster, roomier, and
+simpler engine**: 79 tok/s on code (tuned) against 52 through vLLM, 47-second
+cold load against 9.5 minutes, and 45 to 60 GiB of free memory against 17.
+
+For an OpenAI-compatible API endpoint, serve exllamav3 through
+[TabbyAPI](https://github.com/theroyallab/tabbyAPI). TabbyAPI is the
+recommended API layer for exllamav3: it provides the `/v1/chat/completions`
+and `/v1/completions` endpoints with streaming, and runs on the same
+exllamav3 engine that produces the 79 tok/s numbers above.
+
+The **vLLM path** is for what needs vLLM specifically: its reasoning and
+tool-call parsers, structured output, tensor parallel across two Sparks,
+tooling that assumes a vLLM endpoint, and packs exllamav3 cannot run.
+
+## Quick start: exllamav3 native
+
+The fastest path. No vLLM, no pack rewrites, no patches.
+
+### 1. Build exllamav3
+
+`scripts/exl3_native/setup_exllamav3_150.sh` builds a venv
+with exllamav3 1.5.0 and JIT-compiles the extension (the release still carries
+x86-only intrinsics in its CPU MoE offload and tensor-parallel paths, so it
+applies the aarch64 patch from the plugin repo plus two stub symbols 1.5.0
+added).
+
+For the tuned configuration, build from
+[vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)
+(upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
++ the GB10 decode changes: int8 GatedResidual mixer kernels, pruned draft
+`lm_head`, MTP host-sync removal, [#2](https://github.com/vcruz305/exllamav3/pull/2),
+[#3](https://github.com/vcruz305/exllamav3/pull/3),
+per-K-group fused MoE dispatch for mixed-K packs, [#4](https://github.com/vcruz305/exllamav3/pull/4)).
+
+### 2. Download the pack
+
+```bash
+hf download turboderp/Qwen3.8-Flash-Next-exl3 --revision 3.05bpw_h5_ng5 \
+  --local-dir ~/models/Qwen3.8-Flash-Next-EXL3
+```
+
+About 80 GB. No pack preparation is needed for the native path.
+
+### 3. Run
+
+Stock exllamav3 1.5.0:
+
+```bash
+python examples/chat.py -m ~/models/Qwen3.8-Flash-Next-EXL3 -mode qwen35 -mtp -ndt 3
+```
+
+The tuned configuration (79 tok/s on code, from
+`scripts/exl3_native/tuning/run-qwen38-exl3.sh`):
+
+```sh
+export EXL3_INT8_GEMV=0 EXL3_MOE_COOP_WIDE=1 EXL3_GR_INT8=1 EXL3_MTP_HEAD_N=65536 EXL3_NGRAM_STREAM=0
+taskset -c 5-9,15-19 python examples/chat.py -m $MODEL -mode qwen35 -mtp -ndt 5 -dds -dc 0.6 -cq 8,8 -cs 262144
+```
+
+One GB10 trap: `cudaMemGetInfo` reports MemFree rather than
+MemAvailable, so page cache left by a previous model load makes exllamav3's
+autosplit refuse a 100 GiB pack while `/proc/meminfo` shows 118 GiB available.
+The harnesses take `--prealloc-gib 100`, which allocates and frees that much on
+CUDA first so the kernel reclaims the cache.
+
+Scripts are in `scripts/exl3_native/`; `scripts/exl3_native/tuning/` holds the
+launcher, `bench.sh`, the A/B matrix scripts, and their logs.
+
+## Quick start: vLLM path
+
+Use this path when you need the OpenAI API with reasoning/tool-call parsers,
+structured output, tensor parallel, or packs exllamav3 cannot run.
+
 
 The pack as published needs three one-time rewrites before vLLM's native loader
 will serve it, and vLLM needs three runtime patches until this architecture is
@@ -256,269 +335,7 @@ written to measure on this engine; see
 [How things were measured](#how-things-were-measured). Use the
 `spec_decode_num_accepted_tokens` counters from `/metrics` instead.
 
-## Results, vLLM path (2026-09-13)
-
-vLLM 0.29.0, exllamav3 1.4.7, vllm-exl3 0.4.2, `MAX_MODEL_LEN=262144
-GPU_MEM_UTIL=0.80 MAX_NUM_SEQS=4 --mamba-ssm-cache-dtype bfloat16`. Decode
-excludes TTFT. Each short-context figure is the median of four samples, and
-every sample uses a unique prompt prefix so prefix caching cannot fake a cold
-prefill (that this works is verified below by vLLM's own hit counters).
-
-### Draft depth
-
-The earlier sweep (see Historical results) picked k=2 on the build that predated
-the fat-expert and dense-routing fixes. On the fixed build the ranking flips:
-
-| Config | Decode @ 4k | Decode @ 32k | KV pool | Per-position acceptance |
-|---|---:|---:|---:|---|
-| No draft | 27.77 | 27.58 | 512,439 | n/a |
-| MTP k=2 | 47.39 | 46.60 | 411,319 | 0.829 / 0.671 |
-| MTP k=3 | **50.09** | **49.73** | 385,422 | 0.863 / 0.675 / 0.571 |
-| MTP k=4 | wedges | wedges | n/a | engine hangs after torch.compile, never allocates KV |
-
-k=3 over k=2 is about 6%. The two were measured on separate boots at n=4 and
-n=3 with overlapping sample ranges (48.1 to 52.8 against 45.5 to 49.9), so call
-it likely rather than established.
-
-`--mamba-ssm-cache-dtype bfloat16` for the 36 linear-attention layers raises the
-KV pool from 385,422 to 416,163 tokens, about 8%. Decode measured 52.22 at 4k
-against 50.09 without it, but the ranges overlap almost entirely at the ±5%
-spread speculation introduces. Enable it for the memory; the speed gain is
-unproven.
-
-### Context and the MTP acceptance cliff
-
-Only 12 of the 48 layers are full attention, with 2 KV heads at head_dim 256,
-so KV costs 24,576 bytes per token and the full 262,144 ceiling needs about
-6 GB. The engine boots at 262,144 with 1.6x concurrency headroom at the default
-utilisation. Decode barely moves with context: MTP k=3 loses about 4% from 3k
-to 163k tokens, and no-draft loses about 4% from 3k to 189k.
-
-Then, at **163,840 prompt tokens (160 × 1024)**, draft acceptance collapses to
-exactly 0.000 at every position. Pinned to within 273 tokens:
-
-| Prompt tokens | Tokens per stream chunk | Decode tok/s | |
-|---:|---:|---:|---|
-| 163,506 | 2.86 | 53.14 | healthy |
-| 163,818 | 2.86 | 51.76 | healthy, 22 tokens below the boundary |
-| 164,091 | 1.00 | 21.99 | dead, 251 tokens above it |
-
-The full curve, MTP k=3 with bf16 recurrent state. A chunk carrying 1.00 tokens
-means no drafts were accepted:
-
-| Prompt tokens | Tokens per chunk | Decode tok/s |
-|---:|---:|---:|
-| 3,060 | 3.03 | 52.22 |
-| 24,354 | 2.98 | 50.53 |
-| 97,362 | 2.88 | 48.13 |
-| 148,569 | 2.91 | 50.72 |
-| 156,018 | 2.91 | 51.98 |
-| 163,428 | 2.75 | 48.71 |
-| 163,818 | 2.86 | 51.76 |
-| 178,287 | **1.00** | 21.95 |
-| 208,005 | 1.00 | 21.94 |
-| 252,582 | 1.00 | 21.30 |
-
-The draft head keeps drafting past the cliff and the target rejects all of it,
-so you pay the draft cost for nothing. The no-draft baseline at comparable
-context is 26.59 (measured at 188,661), so above the cliff, **turning
-speculation off is worth about 21%.** No-draft was not measured at 252k; the
-comparison is established around 180k.
-
-**The mechanism is not identified.** What is known:
-
-- It keys on **prompt length at prefill**, not on decode position. At 163,818
-  prompt tokens with 40 generated, about half the generated positions sit past
-  163,840, and acceptance stayed at 2.86. Whatever breaks is built once during
-  prefill, which points at the QSA block index rather than rotary embeddings.
-- No hardcoded 163840 exists anywhere in the `qwen4_exp` or exl3 code path.
-- Three candidates were checked and ruled out, recorded so nobody re-chases
-  them: `VLLM_MAX_TOKENS_PER_EXPERT_FP4_MOE = 163840` in `vllm/envs.py` is read
-  only by the NVFP4 CUTLASS MoE helpers, which an EXL3 pack never calls, and
-  raises rather than degrading silently; a draft config with a smaller
-  `max_position_embeddings` is impossible because `config/speculative.py:1175`
-  sets `draft_model_config = target_model_config` for MTP; and
-  `get_max_prefill_buffer_size()` in the MLA indexer mentions 163840 only in a
-  comment, returns `max_model_len * 40`, and is imported only by the DeepSeek
-  models.
-
-The next step is runtime instrumentation of the QSA indexer during prefill.
-Until then: MTP k=3 below 163,840 prompt tokens, `SPEC_CONFIG=none` at or
-above it. The serve script warns when `MAX_MODEL_LEN` crosses the boundary.
-
-### Prefill and prefix caching
-
-Cold prefill sits at 1,075 to 1,180 tok/s across an 80x range of prompt sizes.
-That flatness is real, not a scheduling artifact. vLLM warns on every
-speculative boot that MTP clamps `max_num_scheduled_tokens` to 2048 and suggests
-raising `max_num_batched_tokens`; an 8x larger chunk buys 2%:
-
-| max-num-batched-tokens | util | prefill @ 24k | prefill @ 97k | KV pool |
-|---:|---:|---:|---:|---:|
-| 2,048 (clamped by MTP) | 0.80 | 1,142.3 | 1,104.3 | 416,163 |
-| 16,384 | 0.85 | 1,166.0 | 1,128.7 | 512,619 |
-
-At 0.80 the larger chunk costs enough activation memory that the engine refuses
-to start, naming 260,416 as the achievable length. 0.85 fixes that and gives the
-largest KV pool measured, but the kernel log then carries
-`NVRM: Check failed: Out of memory [NV_ERR_NO_MEMORY]` during startup, so it is
-documented rather than recommended. The cold ceiling runs far below the box's
-arithmetic capability, which points at the quantized-weight path; the profiler
-figure in Historical results is for decode and was not re-measured for prefill,
-so treat the cause as unconfirmed.
-
-**The prefill lever that matters is prefix caching.** For the real workload, a
-fixed document or system prompt with a new question each turn, the cached path
-is what you get. Hit rates are vLLM's own counters:
-
-| 196k-token prompt | TTFT | Cached |
-|---|---:|---:|
-| cold, novel prefix | 178.72 s | 0.0% (0 / 196,022) |
-| same document, new question | 2.33 s | 98.9% (193,856 / 196,010) |
-| identical repeat | 1.56 s | 99.3% (194,688 / 196,010) |
-
-The 180-second TTFT is a first-turn cost, not a per-turn cost. Do not convert
-those into a prefill tok/s figure: dividing the full prompt by the warm TTFT
-gives a number in the tens of thousands for tokens the engine never computed.
-What it actually computes is the uncached tail, at the same rate as everything
-else (1,322 tokens in 1.56 s is 847 tok/s; 2,154 in 2.33 s is 924 tok/s). The
-work is simply skipped. The 0.0% hit on a novel prefix is also the check that
-validates every cold number in this file.
-
-### Sampling temperature
-
-Every figure above is greedy, which is where draft acceptance is highest. MTP
-k=3 at 4k context, three samples per point, acceptance from `/metrics`:
-
-| temperature | decode tok/s | acceptance |
-|---:|---:|---:|
-| 0.0 | 51.38 | 68.0% |
-| 0.3 | 49.64 | 68.6% |
-| 0.7 | 51.04 | 66.7% |
-| 1.0 | 48.14 | 64.4% |
-
-At a realistic 0.7 the speedup is intact. At 1.0 it costs about 6%.
-
-### Concurrency
-
-Two aggregates are reported, because they answer different questions. The
-*window* aggregate is total tokens over the span from the first stream's first
-token to the last stream's last token: what a queue of N users sees, and under
-vLLM's chunked prefill it charges the other streams' prefills to the first
-stream. The *steady* aggregate is total tokens over the span in which every
-stream is decoding. Unique prefix per stream, `MAX_NUM_SEQS=8`, temperature 0.
-
-**Short prompts (about 190 tokens), 128 tokens per stream, median of two rounds**
-
-| streams | MTP k=3, steady | MTP k=3, window | no draft, steady | no draft, window |
-|---:|---:|---:|---:|---:|
-| 1 | 54.8 | 54.8 | 29.0 | 29.0 |
-| 2 | 89.4 | 83.5 | 49.1 | 48.2 |
-| 4 | **155.6** | 147.7 | 87.2 | 82.3 |
-| 8 | **157.6** | 146.9 | **153.4** | 135.5 |
-
-**3k-token prompts, 512 tokens per stream, one round**
-
-| streams | MTP k=3, steady | MTP k=3, window | no draft, steady | no draft, window |
-|---:|---:|---:|---:|---:|
-| 1 | 53.2 | 53.2 | 28.7 | 28.7 |
-| 2 | 79.6 | 77.0 | 46.0 | 44.8 |
-| 4 | **102.9** | 64.3 | 63.0 | 41.5 |
-| 8 | 90.5 | 47.0 | **73.1** | 40.9 |
-
-**The engine scales.** An earlier version of this section reported a plateau at
-two streams (78 tok/s). That came from 3k-token prompts, 128 tokens per stream
-and the window aggregate alone: with that little decode per stream the window
-is mostly the other streams' chunked prefills, so it measured the scheduler's
-interleaving rather than decode. A torch profile of a 1-stream and a 4-stream
-decode window (short prompts, 256 tokens) shows the kernels batching as they
-should: the fused MoE takes 2.0x the GPU time for 4x the tokens and the dense
-EXL3 layers are flat. Long contexts do cost more per batched step (3k prompts:
-103 tok/s at four streams against 156 with short prompts), which is the
-attention and PLE state work per token. MTP k=3 wins at every concurrency up to
-four streams and is level with no draft at eight. **Throughput sweet spot: MTP
-k=3 at four streams, about 150 tok/s aggregate on short prompts and about 100
-on 3k-token prompts.**
-
-### Levers that measured empty
-
-Recorded so nobody re-tests them:
-
-| Lever | Result |
-|---|---|
-| `--max-num-seqs 2` vs 4 | 52.84 vs 52.22 tok/s at 4k, inside noise; KV pool +2%. Keep 4 for burst tolerance. |
-| CUDA graph mode | already `FULL_AND_PIECEWISE` on every boot; nothing to enable |
-| `--max-num-batched-tokens 16384` | +2% prefill, see above |
-| `--kv-cache-dtype fp8` | refused: `Qwen4Exp QSA requires a BF16 main KV cache` |
-| MTP k=4 | wedges the engine after torch.compile |
-
-### The 4.05 bpw revision
-
-turboderp also publishes `4.05bpw_h6_ng6`: dense linears at K=6 and experts at
-K=4 (against K=5 and K=3), a 6-bit n-gram table, 107.5 GB on disk. Measured on
-the same build and harness with the table resident on the device (the default),
-it needs `--gpu-memory-utilization 0.92` to boot at all, and a 131,072 context:
-
-| | 3.05 bpw | 4.05 bpw |
-|---|---:|---:|
-| Model resident | 79 GiB | **100.81 GiB** |
-| n-gram table, packed | 30.4 GiB | 36.36 GiB |
-| Utilisation needed | 0.80 | **0.92** |
-| Max context that boots | 262,144 | **131,072** |
-| KV pool | 416,163 tokens (1.6x at 262k) | 195,509 tokens (1.49x at 131k) |
-| MemAvailable while serving | 17 to 18 GiB | **3.4 GiB ready, 2.5 GiB under load** |
-| Decode @ 4k, MTP k=3 | 52.22 | 48.70 |
-| Decode @ 32k, MTP k=3 | 50.53 | 51.31 |
-| Cold prefill @ 24k | 1,142 | 1,137 |
-| Draft acceptance | 68% | **74%** |
-
-**Speed is unchanged within noise.** Decode at 4k and 32k and cold prefill all
-land inside the 3.05 pack's sample spread. That is consistent with the profiler
-finding that decode is bound by trellis dequantization rather than bytes moved:
-the per-weight dequant cost does not grow much with K. The one speed-adjacent
-gain is acceptance, 68% to 74%, a higher-precision target agreeing with its
-draft more often.
-
-**The cost is entirely memory, and it is severe.** 22 GiB more resident,
-utilisation forced to 0.92, and half the context. At 0.92 the box sits under
-earlyoom's 3% trigger and survives only because swap is free; a 262k attempt at
-0.93 without a draft drove MemAvailable to 1 GiB during load and was killed by
-the watchdog before KV allocation. With the table resident, **the 4.05
-revision does not reach 262k on one Spark**, and the configuration that does
-boot is not one to serve from. Quality was not measured here; that needs the
-sixcat harness from the historical comparison.
-
-**With the n-gram table on NVMe it fits.** vllm-exl3 `main` (`94c29ba`) can
-keep the table as the checkpoint's memory-mapped views and gather each
-lookup's rows on the host (`NGRAM_TABLE=disk` in the serve script,
-`VLLM_EXL3_NGRAM_TABLE=disk` underneath), so the 36 GiB never lands on the
-device. Measured 2026-09-14, same harness, `MODEL_DIR=<4.05> NGRAM_TABLE=disk`:
-
-| 4.05 bpw | table resident, 131k, util 0.92 | table on NVMe, 262k, util 0.80 |
-|---|---:|---:|
-| Boots at 262,144 | no | **yes** |
-| KV pool | 195,509 tokens (1.49x at 131k) | **954,453 tokens (3.64x at 262k)** |
-| MemAvailable while serving | 3.4 GiB | **18 to 20 GiB** |
-| Decode @ 4k / 32k, MTP k=3 | 48.70 / 51.31 | 41.1 / 47.9 |
-| Decode @ 4k, no draft | not measured | 24.4 |
-| Cold prefill @ 24k | 1,137 | 1,128 |
-
-The decode cost has two parts. The host gather is a synchronization point, so
-the lookup must run outside CUDA graphs: disk mode uses PIECEWISE-only graphs
-with the lookup as a splitting op, and PIECEWISE alone costs 5 to 7% on this
-model (measured on the 3.05 pack: 48.25 / 48.01 against 52.22 / 50.53 at k=3).
-On top of that, rows page in from NVMe the first time a prompt touches them,
-which is why the short-prompt samples start slow (32.6 to 46.0 tok/s across
-the four) and the 32k figure sits where PIECEWISE alone would put it. The
-right way to read it: 4.05 at 262k on one Spark is now a real configuration,
-about 10% slower than 3.05 at the same context, with 15 GiB more headroom than
-3.05 resident.
-
-This revision ships the n-gram table as one unsharded `ngram_embedding.trellis`
-tensor (`I16 [320001536, 61]`, 39 GB) where 3.05 ships 128 `shard_N.trellis`
-shards. Plugin builds before `94c29ba` misfiled it as a dense linear and the
-boot OOMed in about 100 seconds; `scripts/rename_unsharded_ngram.py` is the
-workaround for those builds only.
+## Benchmarks: exllamav3 native
 
 ### Running the pack through exllamav3 directly
 
@@ -587,9 +404,9 @@ Python generator driven in-process, and that is the honest scope of the
 comparison:
 
 - No OpenAI-compatible API in what was measured. exllamav3 is normally served
-  through [TabbyAPI](https://github.com/theroyallab/tabbyAPI); its overhead and
-  its feature set on this model were not measured here, and the concurrency
-  numbers above are for jobs enqueued directly on the generator.
+  through [TabbyAPI](https://github.com/theroyallab/tabbyAPI), the recommended
+  API layer for exllamav3 native. The concurrency
+  numbers in the tables above are for jobs enqueued directly on the generator.
 - No reasoning parser, tool-call parser, structured output or the rest of
   vLLM's serving surface. Clients that expect `--reasoning-parser qwen3` and
   hermes tool calls get raw text.
@@ -603,21 +420,14 @@ comparison:
   forward-correct graph in upstream exllamav3; for that pack the vLLM path is
   the only one.
 
-**How to run it.** `scripts/exl3_native/setup_exllamav3_150.sh` builds a venv
-with exllamav3 1.5.0 and JIT-compiles the extension (the release still carries
-x86-only intrinsics in its CPU MoE offload and tensor-parallel paths, so it
-applies the aarch64 patch from the plugin repo plus two stub symbols 1.5.0
-added). `scripts/exl3_native/make_native_view.sh` builds a symlink view of a
+**How to run it.** See [Quick start: exllamav3 native](#quick-start-exllamav3-native)
+above. `scripts/exl3_native/make_native_view.sh` builds a symlink view of a
 prepared pack with the native `config.json` and index, since `prepare_pack.sh`
 rewrites those for vLLM; for a 4.05 pack that was prepared with the old
 `rename_unsharded_ngram.py` step, pass `ngram_embedding.safetensors.native` as
 the third argument so exllamav3 reads the original unsharded file. A pack
 prepared with the current tools needs no third argument. `bench_native.py` and `bench_native_conc.py` are
-the two harnesses. One GB10 trap: `cudaMemGetInfo` reports MemFree rather than
-MemAvailable, so page cache left by a previous model load makes exllamav3's
-autosplit refuse a 100 GiB pack while `/proc/meminfo` shows 118 GiB available.
-Both harnesses take `--prealloc-gib 100`, which allocates and frees that much on
-CUDA first so the kernel reclaims the cache.
+the two harnesses.
 
 #### Can the plugin get there?
 
@@ -664,20 +474,15 @@ separates native from the recipe is above the kernels:
 Everything else that could plausibly matter was measured empty earlier in this
 README (`max-num-seqs`, CUDA graph mode, batched-token size, fp8 KV).
 
-**Which to use.** For one user on one Spark, exllamav3 directly is the faster
-(79 tok/s on code tuned, against 52), roomier and simpler engine, and it
-loads in under a minute. The vLLM path is
-for what needs vLLM: the OpenAI API with its parsers and structured output,
-tensor parallel across two Sparks, tooling that assumes a vLLM endpoint, and
-packs exllamav3 cannot run.
 
 #### The native engine, tuned for GB10
 
 The numbers above ran exllamav3 1.5.0 with its stock defaults. This is the same
-engine at [vcruz305/exllamav3 `523ecd3`](https://github.com/vcruz305/exllamav3/commit/523ecd3)
+engine at [vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)
 (upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
 + the GB10 decode changes, [#2](https://github.com/vcruz305/exllamav3/pull/2),
-[#3](https://github.com/vcruz305/exllamav3/pull/3)),
+[#3](https://github.com/vcruz305/exllamav3/pull/3),
+[#4](https://github.com/vcruz305/exllamav3/pull/4)),
 configured for this box. `scripts/exl3_native/tuning/run-qwen38-exl3.sh` is that
 configuration:
 
@@ -949,6 +754,271 @@ scripts (`pubbench.sh`, `i8bench.sh`) with their logs under `logs/`, the
 harnesses, and the three fork commits as `patches/`; its README lists what each
 does.
 
+## Benchmarks: vLLM path (2026-09-13)
+
+
+vLLM 0.29.0, exllamav3 1.4.7, vllm-exl3 0.4.2, `MAX_MODEL_LEN=262144
+GPU_MEM_UTIL=0.80 MAX_NUM_SEQS=4 --mamba-ssm-cache-dtype bfloat16`. Decode
+excludes TTFT. Each short-context figure is the median of four samples, and
+every sample uses a unique prompt prefix so prefix caching cannot fake a cold
+prefill (that this works is verified below by vLLM's own hit counters).
+
+### Draft depth
+
+The earlier sweep (see Historical results) picked k=2 on the build that predated
+the fat-expert and dense-routing fixes. On the fixed build the ranking flips:
+
+| Config | Decode @ 4k | Decode @ 32k | KV pool | Per-position acceptance |
+|---|---:|---:|---:|---|
+| No draft | 27.77 | 27.58 | 512,439 | n/a |
+| MTP k=2 | 47.39 | 46.60 | 411,319 | 0.829 / 0.671 |
+| MTP k=3 | **50.09** | **49.73** | 385,422 | 0.863 / 0.675 / 0.571 |
+| MTP k=4 | wedges | wedges | n/a | engine hangs after torch.compile, never allocates KV |
+
+k=3 over k=2 is about 6%. The two were measured on separate boots at n=4 and
+n=3 with overlapping sample ranges (48.1 to 52.8 against 45.5 to 49.9), so call
+it likely rather than established.
+
+`--mamba-ssm-cache-dtype bfloat16` for the 36 linear-attention layers raises the
+KV pool from 385,422 to 416,163 tokens, about 8%. Decode measured 52.22 at 4k
+against 50.09 without it, but the ranges overlap almost entirely at the ±5%
+spread speculation introduces. Enable it for the memory; the speed gain is
+unproven.
+
+### Context and the MTP acceptance cliff
+
+Only 12 of the 48 layers are full attention, with 2 KV heads at head_dim 256,
+so KV costs 24,576 bytes per token and the full 262,144 ceiling needs about
+6 GB. The engine boots at 262,144 with 1.6x concurrency headroom at the default
+utilisation. Decode barely moves with context: MTP k=3 loses about 4% from 3k
+to 163k tokens, and no-draft loses about 4% from 3k to 189k.
+
+Then, at **163,840 prompt tokens (160 × 1024)**, draft acceptance collapses to
+exactly 0.000 at every position. Pinned to within 273 tokens:
+
+| Prompt tokens | Tokens per stream chunk | Decode tok/s | |
+|---:|---:|---:|---|
+| 163,506 | 2.86 | 53.14 | healthy |
+| 163,818 | 2.86 | 51.76 | healthy, 22 tokens below the boundary |
+| 164,091 | 1.00 | 21.99 | dead, 251 tokens above it |
+
+The full curve, MTP k=3 with bf16 recurrent state. A chunk carrying 1.00 tokens
+means no drafts were accepted:
+
+| Prompt tokens | Tokens per chunk | Decode tok/s |
+|---:|---:|---:|
+| 3,060 | 3.03 | 52.22 |
+| 24,354 | 2.98 | 50.53 |
+| 97,362 | 2.88 | 48.13 |
+| 148,569 | 2.91 | 50.72 |
+| 156,018 | 2.91 | 51.98 |
+| 163,428 | 2.75 | 48.71 |
+| 163,818 | 2.86 | 51.76 |
+| 178,287 | **1.00** | 21.95 |
+| 208,005 | 1.00 | 21.94 |
+| 252,582 | 1.00 | 21.30 |
+
+The draft head keeps drafting past the cliff and the target rejects all of it,
+so you pay the draft cost for nothing. The no-draft baseline at comparable
+context is 26.59 (measured at 188,661), so above the cliff, **turning
+speculation off is worth about 21%.** No-draft was not measured at 252k; the
+comparison is established around 180k.
+
+**The mechanism is not identified.** What is known:
+
+- It keys on **prompt length at prefill**, not on decode position. At 163,818
+  prompt tokens with 40 generated, about half the generated positions sit past
+  163,840, and acceptance stayed at 2.86. Whatever breaks is built once during
+  prefill, which points at the QSA block index rather than rotary embeddings.
+- No hardcoded 163840 exists anywhere in the `qwen4_exp` or exl3 code path.
+- Three candidates were checked and ruled out, recorded so nobody re-chases
+  them: `VLLM_MAX_TOKENS_PER_EXPERT_FP4_MOE = 163840` in `vllm/envs.py` is read
+  only by the NVFP4 CUTLASS MoE helpers, which an EXL3 pack never calls, and
+  raises rather than degrading silently; a draft config with a smaller
+  `max_position_embeddings` is impossible because `config/speculative.py:1175`
+  sets `draft_model_config = target_model_config` for MTP; and
+  `get_max_prefill_buffer_size()` in the MLA indexer mentions 163840 only in a
+  comment, returns `max_model_len * 40`, and is imported only by the DeepSeek
+  models.
+
+The next step is runtime instrumentation of the QSA indexer during prefill.
+Until then: MTP k=3 below 163,840 prompt tokens, `SPEC_CONFIG=none` at or
+above it. The serve script warns when `MAX_MODEL_LEN` crosses the boundary.
+
+### Prefill and prefix caching
+
+Cold prefill sits at 1,075 to 1,180 tok/s across an 80x range of prompt sizes.
+That flatness is real, not a scheduling artifact. vLLM warns on every
+speculative boot that MTP clamps `max_num_scheduled_tokens` to 2048 and suggests
+raising `max_num_batched_tokens`; an 8x larger chunk buys 2%:
+
+| max-num-batched-tokens | util | prefill @ 24k | prefill @ 97k | KV pool |
+|---:|---:|---:|---:|---:|
+| 2,048 (clamped by MTP) | 0.80 | 1,142.3 | 1,104.3 | 416,163 |
+| 16,384 | 0.85 | 1,166.0 | 1,128.7 | 512,619 |
+
+At 0.80 the larger chunk costs enough activation memory that the engine refuses
+to start, naming 260,416 as the achievable length. 0.85 fixes that and gives the
+largest KV pool measured, but the kernel log then carries
+`NVRM: Check failed: Out of memory [NV_ERR_NO_MEMORY]` during startup, so it is
+documented rather than recommended. The cold ceiling runs far below the box's
+arithmetic capability, which points at the quantized-weight path; the profiler
+figure in Historical results is for decode and was not re-measured for prefill,
+so treat the cause as unconfirmed.
+
+**The prefill lever that matters is prefix caching.** For the real workload, a
+fixed document or system prompt with a new question each turn, the cached path
+is what you get. Hit rates are vLLM's own counters:
+
+| 196k-token prompt | TTFT | Cached |
+|---|---:|---:|
+| cold, novel prefix | 178.72 s | 0.0% (0 / 196,022) |
+| same document, new question | 2.33 s | 98.9% (193,856 / 196,010) |
+| identical repeat | 1.56 s | 99.3% (194,688 / 196,010) |
+
+The 180-second TTFT is a first-turn cost, not a per-turn cost. Do not convert
+those into a prefill tok/s figure: dividing the full prompt by the warm TTFT
+gives a number in the tens of thousands for tokens the engine never computed.
+What it actually computes is the uncached tail, at the same rate as everything
+else (1,322 tokens in 1.56 s is 847 tok/s; 2,154 in 2.33 s is 924 tok/s). The
+work is simply skipped. The 0.0% hit on a novel prefix is also the check that
+validates every cold number in this file.
+
+### Sampling temperature
+
+Every figure above is greedy, which is where draft acceptance is highest. MTP
+k=3 at 4k context, three samples per point, acceptance from `/metrics`:
+
+| temperature | decode tok/s | acceptance |
+|---:|---:|---:|
+| 0.0 | 51.38 | 68.0% |
+| 0.3 | 49.64 | 68.6% |
+| 0.7 | 51.04 | 66.7% |
+| 1.0 | 48.14 | 64.4% |
+
+At a realistic 0.7 the speedup is intact. At 1.0 it costs about 6%.
+
+### Concurrency
+
+Two aggregates are reported, because they answer different questions. The
+*window* aggregate is total tokens over the span from the first stream's first
+token to the last stream's last token: what a queue of N users sees, and under
+vLLM's chunked prefill it charges the other streams' prefills to the first
+stream. The *steady* aggregate is total tokens over the span in which every
+stream is decoding. Unique prefix per stream, `MAX_NUM_SEQS=8`, temperature 0.
+
+**Short prompts (about 190 tokens), 128 tokens per stream, median of two rounds**
+
+| streams | MTP k=3, steady | MTP k=3, window | no draft, steady | no draft, window |
+|---:|---:|---:|---:|---:|
+| 1 | 54.8 | 54.8 | 29.0 | 29.0 |
+| 2 | 89.4 | 83.5 | 49.1 | 48.2 |
+| 4 | **155.6** | 147.7 | 87.2 | 82.3 |
+| 8 | **157.6** | 146.9 | **153.4** | 135.5 |
+
+**3k-token prompts, 512 tokens per stream, one round**
+
+| streams | MTP k=3, steady | MTP k=3, window | no draft, steady | no draft, window |
+|---:|---:|---:|---:|---:|
+| 1 | 53.2 | 53.2 | 28.7 | 28.7 |
+| 2 | 79.6 | 77.0 | 46.0 | 44.8 |
+| 4 | **102.9** | 64.3 | 63.0 | 41.5 |
+| 8 | 90.5 | 47.0 | **73.1** | 40.9 |
+
+**The engine scales.** An earlier version of this section reported a plateau at
+two streams (78 tok/s). That came from 3k-token prompts, 128 tokens per stream
+and the window aggregate alone: with that little decode per stream the window
+is mostly the other streams' chunked prefills, so it measured the scheduler's
+interleaving rather than decode. A torch profile of a 1-stream and a 4-stream
+decode window (short prompts, 256 tokens) shows the kernels batching as they
+should: the fused MoE takes 2.0x the GPU time for 4x the tokens and the dense
+EXL3 layers are flat. Long contexts do cost more per batched step (3k prompts:
+103 tok/s at four streams against 156 with short prompts), which is the
+attention and PLE state work per token. MTP k=3 wins at every concurrency up to
+four streams and is level with no draft at eight. **Throughput sweet spot: MTP
+k=3 at four streams, about 150 tok/s aggregate on short prompts and about 100
+on 3k-token prompts.**
+
+### Levers that measured empty
+
+Recorded so nobody re-tests them:
+
+| Lever | Result |
+|---|---|
+| `--max-num-seqs 2` vs 4 | 52.84 vs 52.22 tok/s at 4k, inside noise; KV pool +2%. Keep 4 for burst tolerance. |
+| CUDA graph mode | already `FULL_AND_PIECEWISE` on every boot; nothing to enable |
+| `--max-num-batched-tokens 16384` | +2% prefill, see above |
+| `--kv-cache-dtype fp8` | refused: `Qwen4Exp QSA requires a BF16 main KV cache` |
+| MTP k=4 | wedges the engine after torch.compile |
+
+### The 4.05 bpw revision
+
+turboderp also publishes `4.05bpw_h6_ng6`: dense linears at K=6 and experts at
+K=4 (against K=5 and K=3), a 6-bit n-gram table, 107.5 GB on disk. Measured on
+the same build and harness with the table resident on the device (the default),
+it needs `--gpu-memory-utilization 0.92` to boot at all, and a 131,072 context:
+
+| | 3.05 bpw | 4.05 bpw |
+|---|---:|---:|
+| Model resident | 79 GiB | **100.81 GiB** |
+| n-gram table, packed | 30.4 GiB | 36.36 GiB |
+| Utilisation needed | 0.80 | **0.92** |
+| Max context that boots | 262,144 | **131,072** |
+| KV pool | 416,163 tokens (1.6x at 262k) | 195,509 tokens (1.49x at 131k) |
+| MemAvailable while serving | 17 to 18 GiB | **3.4 GiB ready, 2.5 GiB under load** |
+| Decode @ 4k, MTP k=3 | 52.22 | 48.70 |
+| Decode @ 32k, MTP k=3 | 50.53 | 51.31 |
+| Cold prefill @ 24k | 1,142 | 1,137 |
+| Draft acceptance | 68% | **74%** |
+
+**Speed is unchanged within noise.** Decode at 4k and 32k and cold prefill all
+land inside the 3.05 pack's sample spread. That is consistent with the profiler
+finding that decode is bound by trellis dequantization rather than bytes moved:
+the per-weight dequant cost does not grow much with K. The one speed-adjacent
+gain is acceptance, 68% to 74%, a higher-precision target agreeing with its
+draft more often.
+
+**The cost is entirely memory, and it is severe.** 22 GiB more resident,
+utilisation forced to 0.92, and half the context. At 0.92 the box sits under
+earlyoom's 3% trigger and survives only because swap is free; a 262k attempt at
+0.93 without a draft drove MemAvailable to 1 GiB during load and was killed by
+the watchdog before KV allocation. With the table resident, **the 4.05
+revision does not reach 262k on one Spark**, and the configuration that does
+boot is not one to serve from. Quality was not measured here; that needs the
+sixcat harness from the historical comparison.
+
+**With the n-gram table on NVMe it fits.** vllm-exl3 `main` (`94c29ba`) can
+keep the table as the checkpoint's memory-mapped views and gather each
+lookup's rows on the host (`NGRAM_TABLE=disk` in the serve script,
+`VLLM_EXL3_NGRAM_TABLE=disk` underneath), so the 36 GiB never lands on the
+device. Measured 2026-09-14, same harness, `MODEL_DIR=<4.05> NGRAM_TABLE=disk`:
+
+| 4.05 bpw | table resident, 131k, util 0.92 | table on NVMe, 262k, util 0.80 |
+|---|---:|---:|
+| Boots at 262,144 | no | **yes** |
+| KV pool | 195,509 tokens (1.49x at 131k) | **954,453 tokens (3.64x at 262k)** |
+| MemAvailable while serving | 3.4 GiB | **18 to 20 GiB** |
+| Decode @ 4k / 32k, MTP k=3 | 48.70 / 51.31 | 41.1 / 47.9 |
+| Decode @ 4k, no draft | not measured | 24.4 |
+| Cold prefill @ 24k | 1,137 | 1,128 |
+
+The decode cost has two parts. The host gather is a synchronization point, so
+the lookup must run outside CUDA graphs: disk mode uses PIECEWISE-only graphs
+with the lookup as a splitting op, and PIECEWISE alone costs 5 to 7% on this
+model (measured on the 3.05 pack: 48.25 / 48.01 against 52.22 / 50.53 at k=3).
+On top of that, rows page in from NVMe the first time a prompt touches them,
+which is why the short-prompt samples start slow (32.6 to 46.0 tok/s across
+the four) and the 32k figure sits where PIECEWISE alone would put it. The
+right way to read it: 4.05 at 262k on one Spark is now a real configuration,
+about 10% slower than 3.05 at the same context, with 15 GiB more headroom than
+3.05 resident.
+
+This revision ships the n-gram table as one unsharded `ngram_embedding.trellis`
+tensor (`I16 [320001536, 61]`, 39 GB) where 3.05 ships 128 `shard_N.trellis`
+shards. Plugin builds before `94c29ba` misfiled it as a dense linear and the
+boot OOMed in about 100 seconds; `scripts/rename_unsharded_ngram.py` is the
+workaround for those builds only.
+
 ## How things were measured
 
 **Decode** is `(completion_tokens - 1) / (wall - TTFT)`, counting tokens from
@@ -1209,7 +1279,7 @@ out-of-memory failure that reads like insufficient hardware.
 |---|---|
 | [turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3) | the pack this recipe serves |
 | [vllm-exl3](https://github.com/vcruz305/vllm-exl3) | the EXL3 plugin: source, releases, issues, and the pack-prep / vLLM-patch tools this recipe calls |
-| [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) | my exllamav3 fork: master = upstream + the aarch64 build guards ([#1](https://github.com/vcruz305/exllamav3/pull/1)) + the GB10 decode changes: int8 GatedResidual mixer kernels, pruned draft `lm_head`, MTP host-sync removal ([#2](https://github.com/vcruz305/exllamav3/pull/2)); what the native-engine numbers were measured on |
+| [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) | my exllamav3 fork: master = upstream + the aarch64 build guards ([#1](https://github.com/vcruz305/exllamav3/pull/1)) + the GB10 decode changes: int8 GatedResidual mixer kernels, pruned draft `lm_head`, MTP host-sync removal ([#2](https://github.com/vcruz305/exllamav3/pull/2)); per-K-group fused MoE dispatch for mixed-K packs ([#4](https://github.com/vcruz305/exllamav3/pull/4)); what the native-engine numbers were measured on |
 | [GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe](https://github.com/vcruz305/GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe) | sibling recipe this one is modeled on |
 | [DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe](https://github.com/vcruz305/DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe) | sibling recipe this one is modeled on |
 
