@@ -50,13 +50,14 @@ MTP ndt=5, int8 mixer, Q8 KV, per-expert mixed-K MoE kernel:
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
-| Code (nginx log parser) | **97** | 57% |
+| Code (nginx log parser, /no_think) | **100** | 70% |
+| Code (nginx log parser, thinking) | **86** | 53% |
 | DevOps explainer + YAML | **76** | 40% |
 | Prose (350-word story) | **66** | 31% |
 
 The 4.53 bpw pack loads in ~73 GiB CUDA, leaving ~23 GiB free on the 96 GB card.
-The per-expert mixed-K kernel + DDS fix (`bb912e8`) is what makes the mixed-K pack
-competitive — the per-K-group dispatch (`785f206`) ran at ~60 tok/s, and per-expert Python dispatch at ~38 tok/s.
+The per-expert mixed-K kernel + DDS fix + CPU sync skip (`329e051`) is what makes the mixed-K pack
+competitive — the per-K-group dispatch (`785f206`) ran at ~60 tok/s, and per-expert Python dispatch at ~38 tok/s. With `/no_think` prompts (direct code output, no reasoning chain), the code prompt averages **100 tok/s** (median 101, peak 111, min 91) at 70% draft acceptance.
 
 
 ### 🔧 vLLM Path (Secondary)
