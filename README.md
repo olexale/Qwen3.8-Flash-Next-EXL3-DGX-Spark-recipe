@@ -128,13 +128,14 @@ For one user on one Spark, **exllamav3 directly is the faster, roomier, and
 simpler engine**: 79 tok/s on code (tuned) against 52 through vLLM, 47-second
 cold load against 9.5 minutes, and 45 to 60 GiB of free memory against 17.
 
-For an OpenAI-compatible API endpoint, this recipe includes a thin `/v1`
-wrapper over the native engine: `scripts/exl3_native/serve_openai.sh`
-(default port 8899). It provides `/v1/chat/completions` with streaming and
-Qwen3 XML tool-call parsing, running on the same exllamav3 engine that
-produces the 79 tok/s numbers above.
-[TabbyAPI](https://github.com/theroyallab/tabbyAPI) is another option if you
-need its additional features (multi-model, LoRA hotswap, admin API).
+For an OpenAI-compatible API endpoint, serve exllamav3 through
+[TabbyAPI](https://github.com/theroyallab/tabbyAPI). TabbyAPI is the
+recommended API layer for exllamav3: it provides `/v1/chat/completions`
+and `/v1/completions` with streaming, tool calling via the model's native
+chat template, multi-model support, LoRA hotswap, and an admin API — all
+running on the same exllamav3 engine that produces the 79 tok/s numbers
+above. This recipe also includes a minimal `/v1` wrapper
+(`scripts/exl3_native/serve_openai.sh`) for lightweight single-model use.
 
 The **vLLM path** is for what needs vLLM specifically: its reasoning and
 tool-call parsers, structured output, tensor parallel across two Sparks,
@@ -436,9 +437,10 @@ still no faster than 3.05 (54.3 against 56.4 at k=3).
 Python generator driven in-process, and that is the honest scope of the
 comparison:
 
-- For an OpenAI-compatible API, this recipe includes a `/v1` wrapper:
-  `scripts/exl3_native/serve_openai.sh` (default port 8899). The
-  wrapper uses the GB10 launcher knobs, parses Qwen3 `<function=…>` XML into
+- For an OpenAI-compatible API, use [TabbyAPI](https://github.com/theroyallab/tabbyAPI)
+  (recommended) or the included minimal `/v1` wrapper
+  (`scripts/exl3_native/serve_openai.sh`, default port 8899). The wrapper
+  uses the GB10 launcher knobs, parses Qwen3 `<function=…>` XML into
   OpenAI `tool_calls`, and treats `<|im_start|>` as a stop (`qwen35` otherwise
   only stops on `<|im_end|>`, which can leak as the whole reply). One job at a
   time — this is not vLLM C4. Measured 2026-09-20 on `329e051`: greedy 400-token
