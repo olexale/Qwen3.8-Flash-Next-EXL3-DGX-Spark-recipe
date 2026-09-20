@@ -50,12 +50,12 @@ MTP ndt=5, int8 mixer, Q8 KV, per-expert mixed-K MoE kernel:
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
-| Code (nginx log parser) | **95** | 56% |
-| DevOps explainer + YAML | **76** | 39% |
-| Prose (350-word story) | **68** | 33% |
+| Code (nginx log parser) | **97** | 57% |
+| DevOps explainer + YAML | **76** | 40% |
+| Prose (350-word story) | **66** | 31% |
 
 The 4.53 bpw pack loads in ~73 GiB CUDA, leaving ~23 GiB free on the 96 GB card.
-The per-expert mixed-K kernel (`5e0ba47`) is what makes the mixed-K pack
+The per-expert mixed-K kernel + DDS fix (`bb912e8`) is what makes the mixed-K pack
 competitive — the per-K-group dispatch (`785f206`) ran at ~60 tok/s, and per-expert Python dispatch at ~38 tok/s.
 
 
