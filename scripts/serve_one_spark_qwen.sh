@@ -93,6 +93,8 @@ ARGS=(
   --enable-prefix-caching
   --trust-remote-code
   --reasoning-parser qwen3
+  --enable-auto-tool-choice
+  --tool-call-parser "${TOOL_CALL_PARSER:-qwen3_xml}"
 )
 
 if [[ -n "$MAMBA_SSM_DTYPE" && "$MAMBA_SSM_DTYPE" != "none" ]]; then
