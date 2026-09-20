@@ -15,7 +15,7 @@ plugin.
 **Fastest path.** [Configured for GB10](#the-native-engine-tuned-for-gb10).
 One stream, greedy, 400 new tokens, cold load, through `examples/chat.py`
 (`scripts/exl3_native/tuning/run-qwen38-exl3.sh`), on
-[vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206):
+[vcruz305/exllamav3 `329e051`](https://github.com/vcruz305/exllamav3/commit/329e051):
 
 | Prompt class | Decode tok/s | Draft acceptance |
 |---|---:|---:|
@@ -43,7 +43,7 @@ each part is worth and the per-round profile; a
 
 > **Hardware:** NVIDIA RTX PRO 6000 Blackwell Server Edition — 96 GB HBM3e, discrete GPU, x86_64 host (EPYC).
 
-Same engine ([vcruz305/exllamav3 `5e0ba47`](https://github.com/vcruz305/exllamav3/commit/5e0ba47)),
+Same engine ([vcruz305/exllamav3 `329e051`](https://github.com/vcruz305/exllamav3/commit/329e051)),
 different pack: [4.53 bpw mixed-K](https://huggingface.co/vcruz305/BLACKFROST-3.8-DERISKED-EXL3-4.53bpw_h8_ng8)
 (head K8, per-expert mixed K3–K6). One stream, greedy, 400 new tokens, warm,
 MTP ndt=5, int8 mixer, Q8 KV, per-expert mixed-K MoE kernel:
@@ -60,8 +60,10 @@ The per-expert mixed-K kernel + DDS fix + CPU sync skip (`329e051`) is what make
 competitive — the per-K-group dispatch (`785f206`) ran at ~60 tok/s, and per-expert Python dispatch at ~38 tok/s. With `/no_think` prompts (direct code output, no reasoning chain), the code prompt averages **100 tok/s** (median 101, peak 111, min 91) at 70% draft acceptance.
 
 
-### 🔧 vLLM Path (Secondary)
-
+### 🔧 vLLM Path (Secondary)
+
+
+
 > Same hardware as above (single DGX Spark, GB10, 128 GB).
 
 (2026-09-13, vLLM 0.29.0, vllm-exl3 0.4.2, full 262,144-token
@@ -151,12 +153,12 @@ applies the aarch64 patch from the plugin repo plus two stub symbols 1.5.0
 added).
 
 For the tuned configuration, build from
-[vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)
+[vcruz305/exllamav3 `329e051`](https://github.com/vcruz305/exllamav3/commit/329e051)
 (upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
 + the GB10 decode changes: int8 GatedResidual mixer kernels, pruned draft
 `lm_head`, MTP host-sync removal, [#2](https://github.com/vcruz305/exllamav3/pull/2),
 [#3](https://github.com/vcruz305/exllamav3/pull/3),
-per-K-group fused MoE dispatch for mixed-K packs, [#4](https://github.com/vcruz305/exllamav3/pull/4)).
+per-expert mixed-K MoE kernel (`exl3_moe_mixedk`), DDS fix, CPU sync skip, [#4](https://github.com/vcruz305/exllamav3/pull/4)).
 
 ### 2. Download the pack
 
@@ -439,7 +441,7 @@ comparison:
   wrapper uses the GB10 launcher knobs, parses Qwen3 `<function=…>` XML into
   OpenAI `tool_calls`, and treats `<|im_start|>` as a stop (`qwen35` otherwise
   only stops on `<|im_end|>`, which can leak as the whole reply). One job at a
-  time — this is not vLLM C4. Measured 2026-09-20 on `785f206`: greedy 400-token
+  time — this is not vLLM C4. Measured 2026-09-20 on `329e051`: greedy 400-token
   code **79.5** wall tok/s / **83.8** engine / **74%** accept (matches the
   `chat.py` 79). A Nous Hermes tool loop at ~80k prompt survived; the vLLM
   overlay on this pack died on the second generate (`CUBLAS_STATUS_INTERNAL_ERROR`
@@ -516,7 +518,7 @@ README (`max-num-seqs`, CUDA graph mode, batched-token size, fp8 KV).
 #### The native engine, tuned for GB10
 
 The numbers above ran exllamav3 1.5.0 with its stock defaults. This is the same
-engine at [vcruz305/exllamav3 `785f206`](https://github.com/vcruz305/exllamav3/commit/785f206)
+engine at [vcruz305/exllamav3 `329e051`](https://github.com/vcruz305/exllamav3/commit/329e051)
 (upstream master + the aarch64 guards, [#1](https://github.com/vcruz305/exllamav3/pull/1),
 + the GB10 decode changes, [#2](https://github.com/vcruz305/exllamav3/pull/2),
 [#3](https://github.com/vcruz305/exllamav3/pull/3),
@@ -1317,7 +1319,7 @@ out-of-memory failure that reads like insufficient hardware.
 |---|---|
 | [turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3) | the pack this recipe serves |
 | [vllm-exl3](https://github.com/vcruz305/vllm-exl3) | the EXL3 plugin: source, releases, issues, and the pack-prep / vLLM-patch tools this recipe calls |
-| [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) | my exllamav3 fork: master = upstream + the aarch64 build guards ([#1](https://github.com/vcruz305/exllamav3/pull/1)) + the GB10 decode changes: int8 GatedResidual mixer kernels, pruned draft `lm_head`, MTP host-sync removal ([#2](https://github.com/vcruz305/exllamav3/pull/2)); per-K-group fused MoE dispatch for mixed-K packs ([#4](https://github.com/vcruz305/exllamav3/pull/4)); what the native-engine numbers were measured on |
+| [vcruz305/exllamav3](https://github.com/vcruz305/exllamav3) | my exllamav3 fork: master = upstream + aarch64 guards ([#1](https://github.com/vcruz305/exllamav3/pull/1)) + GB10 decode: int8 mixer, pruned draft head, MTP host-sync removal ([#2](https://github.com/vcruz305/exllamav3/pull/2), [#3](https://github.com/vcruz305/exllamav3/pull/3)) + **`exl3_moe_mixedk` per-expert K kernel** for mixed-K fused dispatch (`329e051`). Required for the 100 tok/s RTX 6000 numbers and for vllm-exl3 mixed-K fused mode. |
 | [GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe](https://github.com/vcruz305/GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe) | sibling recipe this one is modeled on |
 | [DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe](https://github.com/vcruz305/DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe) | sibling recipe this one is modeled on |
 
