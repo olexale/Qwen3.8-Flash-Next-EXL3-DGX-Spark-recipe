@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Serve turboderp's Qwen3.8-Flash-Next EXL3 pack (native quantization_config,
-# after scripts/prepare_pack.sh) from a local vLLM nightly + exllamav3 +
-# vllm-exl3 installation on one DGX Spark (GB10).
+# after scripts/prepare_pack.sh) from a local vLLM + exllamav3 + vllm-exl3
+# installation on one DGX Spark (GB10). It is also the entrypoint of the
+# Docker image (docker/Dockerfile, launched by ./start.sh). Any arguments are
+# appended to the vllm serve command line.
 set -euo pipefail
 
 # turboderp's pack unpacks under its own revision name; accept either.
@@ -116,5 +118,5 @@ if [[ "$NGRAM_TABLE" == "disk" ]]; then
 fi
 
 echo "VLLM_EXL3_NGRAM_KERNEL=$VLLM_EXL3_NGRAM_KERNEL NGRAM_TABLE=$NGRAM_TABLE GPU_MEM_UTIL=$GPU_MEM_UTIL MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS MAMBA_SSM_DTYPE=$MAMBA_SSM_DTYPE SPEC_CONFIG=${SPEC_CONFIG:-<none>}"
-echo "vllm ${ARGS[*]}"
-exec vllm "${ARGS[@]}"
+echo "vllm ${ARGS[*]} $*"
+exec vllm "${ARGS[@]}" "$@"

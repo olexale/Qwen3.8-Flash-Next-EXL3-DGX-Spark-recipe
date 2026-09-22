@@ -198,77 +198,69 @@ launcher, `bench.sh`, the A/B matrix scripts, and their logs.
 Use this path when you need the OpenAI API with reasoning/tool-call parsers,
 structured output, tensor parallel, or packs exllamav3 cannot run.
 
-
 The pack as published needs three one-time rewrites before vLLM's native loader
-will serve it, and vLLM needs three runtime patches until this architecture is
-upstreamed. Everything below is scripted and idempotent.
-
-### Prerequisites
-
-- One DGX Spark (GB10, aarch64), NVMe with room for the ~80 GB pack.
-- **vLLM 0.29.0.** It carries the `Qwen4ExpForConditionalGeneration` model
-  classes in-tree and installs from PyPI as a prebuilt aarch64 wheel, keeping
-  `torch` 2.13.0+cu130:
-  ```bash
-  pip install vllm==0.29.0
-  ```
-  Confirm with `python -c "import vllm; print(vllm.__version__)"`. The current
-  results in this README are on 0.29.0. The historical results were on a 0.28.1
-  nightly (`0.28.1rc1.dev324+ga56654d6d`); if you need a nightly, the
-  [GLM-5.3-Flash recipe](https://github.com/vcruz305/GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe)
-  and the [DeepSeek-V4-Flash-Vision recipe](https://github.com/vcruz305/DeepSeek-V4-Flash-Vision-EXL3-MixedK-DGX-Spark-recipe)
-  show how to build and verify one on this box.
-- **`exllamav3` 1.4.7, built from source**, with the aarch64 patch shipped in
-  the plugin repo (`tools/patch_exllamav3_aarch64.py`). The plugin imports the
-  compiled `exllamav3_ext` module, so the pure-Python wheel is not enough.
-- **`vllm-exl3` from `main`**, at `94c29ba` (2026-09-14) or newer. That is where
-  unsharded n-gram tables and the disk-backed table mode landed (PRs #22 to
-  #24); an older checkout still serves the 3.05 pack but needs the rename step
-  below for 4.05:
-  ```bash
-  pip install git+https://github.com/vcruz305/vllm-exl3@main
-  ```
-  Anything older than commit 6b26e5c (2026-09-08) carries the fat-expert
-  prefill bug that silently corrupts long prompts (fixed in PR #5) and the
-  engine wedge on 33 to 144-token prefills (fixed in PR #7). See Known
-  limitations.
-- `torch` / CUDA 13.0 for aarch64.
-
-### 1. Install the runtime
-
-Install vLLM, `exllamav3` (from source, with the aarch64 patch), and the
-`vllm-exl3` plugin per Prerequisites, then confirm:
+will serve it, and vLLM needs three patches until this architecture is
+upstreamed. The Docker image bakes in the patched runtime, and the scripts in
+the repo root do the rest, the same way as the
+[single-Spark NVFP4 recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark):
 
 ```bash
-python -c "import vllm; print(vllm.__version__)"
-python -c "import exllamav3_ext; print('exllamav3_ext OK')"
+cp .env.sample .env      # edit if you want; the defaults are the measured-best profile
+./build.sh               # patched vLLM image, then a GPU preflight inside it
+./download.sh            # ~80 GB pack into MODEL_DIR, then prepare it for vllm-exl3
+./start.sh               # serve on 127.0.0.1:8899, follow the log until /health answers
+./stop.sh
 ```
 
-### 2. Download the pack
+Needs Docker with the NVIDIA container runtime (stock on DGX OS) and NVMe with
+room for the pack. Nothing else goes on the host: no venv, no source builds,
+no edits to an installed vLLM.
+
+### 1. Build the image
+
+`./build.sh` builds [`docker/Dockerfile`](docker/Dockerfile) on the Spark and
+tags it `IMAGE` from `.env`. The image contains:
+
+| Component | Pin (override in `.env`) | Notes |
+|---|---|---|
+| base | `nvidia/cuda:13.0.2-devel-ubuntu24.04` (`BASE_IMAGE`) | nvcc for the two extension builds |
+| vLLM | `0.29.0` (`VLLM_VERSION`) | PyPI aarch64 wheel, `torch` 2.13.0+cu130; the build fails if torch is not a CUDA 13 build |
+| exllamav3 | `v1.4.7` (`EXLLAMAV3_REF`) | from source, with the plugin's `tools/patch_exllamav3_aarch64.py`; `exllamav3_ext` compiled ahead of time for sm_121 (`TORCH_CUDA_ARCH_LIST=12.1`) |
+| vllm-exl3 | `94c29ba` (`VLLM_EXL3_REF`) | from source, `vllm_exl3_c` compiled against the exllamav3 headers; checkout kept at `/opt/src/vllm-exl3` for its tools |
+| vLLM patches | from the plugin checkout | the three scripts below, applied to the installed vLLM at build time |
+
+| Patch | What it fixes |
+|---|---|
+| `patch_vllm_qwen4_ple.py` | adds `quant_config` to `ParallelLMHead` and to the per-layer n-gram (PLE) embedding table |
+| `patch_vllm_vision_split.py` | drops the pack's split vision attention q/k/v names; vision qkv is served from the pack's bf16 fused copy |
+| `patch_vllm_mtp_lmhead.py` | adds `quant_config` to the MTP draft's `ParallelLMHead` |
+
+Each patch exits non-zero when its anchor is missing, so a vLLM that has moved
+on fails the build rather than failing a ten-minute load with a misleading OOM.
+After the build, `./build.sh` runs `scripts/preflight.py` inside the image with
+the GPU attached. That run imports both compiled extensions, looks up `exl3` in
+vLLM's quantization registry, and checks the patches (`--no-verify` skips it).
+The resolved versions and commits are in `/opt/recipe/BUILD_INFO` in the image.
+
+`VLLM_EXL3_REF=main ./build.sh --no-cache` builds against the plugin's latest
+`main` instead of the pinned commit.
+
+### 2. Download and prepare the pack
 
 ```bash
-hf download turboderp/Qwen3.8-Flash-Next-exl3 --revision 3.05bpw_h5_ng5 \
-  --local-dir ~/models/Qwen3.8-Flash-Next-EXL3
+./download.sh
 ```
 
-About 80 GB: seven `model-0000N-of-00007.safetensors` shards,
-`ngram_embedding.safetensors` (32.6 GB), `mtp_hyper_connection_mixer_patch.safetensors`,
-`config.json`, `model.safetensors.index.json`, and the tokenizer files. The
-serve script also accepts the pack under its revision name,
-`~/models/Qwen3.8-Flash-Next-exl3-3.05bpw`.
+Downloads `REVISION` (default `3.05bpw_h5_ng5`) of
+[turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3)
+into `MODEL_DIR` (default `~/models/Qwen3.8-Flash-Next-EXL3`), running inside the
+image as your user. The download resumes if you rerun it. The pack is about
+80 GB: seven `model-0000N-of-00007.safetensors` shards, `ngram_embedding.safetensors`
+(32.6 GB), `mtp_hyper_connection_mixer_patch.safetensors`, `config.json`,
+`model.safetensors.index.json`, and the tokenizer files.
 
-### 3. Prepare the pack
-
-Three one-time, idempotent rewrites (each keeps a backup) make the pack
-loadable through vllm-exl3's native Qwen4Exp path:
-
-```bash
-PACK_DIR=~/models/Qwen3.8-Flash-Next-EXL3 \
-  PLUGIN_REPO=/path/to/vllm-exl3 \
-  bash scripts/prepare_pack.sh
-```
-
-This runs, in order:
+It then runs `scripts/prepare_pack.sh` against the plugin checkout in the
+image. That script makes three idempotent rewrites, each keeping a backup:
 
 1. `tools/exl3_pack_tools/qwen_pack_scan.py <pack>` writes `pack_scan.json`.
 2. `tools/exl3_pack_tools/qwen_pack_config.py <pack>` rewrites `config.json`'s
@@ -278,62 +270,49 @@ This runs, in order:
    `model.safetensors.index.json`, which vLLM uses as the load list (backs up
    `.native`).
 
+Already downloaded the pack with `hf download`? Point `MODEL_DIR` at it and run
+`./download.sh --prepare-only`. `VERIFY=1 ./download.sh --prepare-only` also
+runs the plugin's GPU verification gates (`tools/verify_native_pack/`).
+
 Packs from exllamav3 1.5.0 onward ship the n-gram table as one unsharded
-tensor (the `4.05bpw_h6_ng6` revision does). The scan tool on `main` reads
-that layout and the config it emits carries `ngram_embedding.sharded: false`;
-`prepare_pack.sh` refuses an older plugin checkout rather than prepare a pack
-that would OOM at boot. `scripts/rename_unsharded_ngram.py` stays in the repo
-as the workaround for an old plugin build only.
+tensor (the `4.05bpw_h6_ng6` revision does). The pinned plugin reads that
+layout; `prepare_pack.sh` refuses an older plugin checkout rather than prepare
+a pack that would OOM at boot.
 
-Optional GPU verification gates ship in `tools/verify_native_pack/`
-(`test_ngram_embedding.py`, `mul1_check.py`, `pad_check.py`,
-`compile_check.py`); run them with `VERIFY=1 bash scripts/prepare_pack.sh`.
-
-### 4. Patch vLLM
-
-Three exact-anchor patches from the plugin repo add the quant-config plumbing
-vLLM does not yet have for `Qwen4ExpForConditionalGeneration`. Each is
-idempotent and keeps a `.orig` backup:
+### 3. Serve
 
 ```bash
-VLLM_DIR="$(python -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"
-python /path/to/vllm-exl3/tools/patch_vllm_qwen4_exp/patch_vllm_qwen4_ple.py "$VLLM_DIR"
-python /path/to/vllm-exl3/tools/patch_vllm_qwen4_exp/patch_vllm_vision_split.py "$VLLM_DIR"
-python /path/to/vllm-exl3/tools/patch_vllm_qwen4_exp/patch_vllm_mtp_lmhead.py "$VLLM_DIR"
+./start.sh
 ```
-
-| Script | What it fixes |
-|---|---|
-| `patch_vllm_qwen4_ple.py` | adds `quant_config` to `ParallelLMHead` and to the per-layer n-gram (PLE) embedding table |
-| `patch_vllm_vision_split.py` | drops the pack's split vision attention q/k/v names; vision qkv is served from the pack's bf16 fused copy |
-| `patch_vllm_mtp_lmhead.py` | adds `quant_config` to the MTP draft's `ParallelLMHead` |
-
-`scripts/preflight.py` checks all of this in a couple of seconds and is worth
-running before a serve attempt, since each model load takes about ten minutes.
-
-### 5. Serve
 
 Defaults are the measured-best configuration: MTP k=3, bf16 recurrent state,
-and the full 262,144 context. `MODEL_DIR` is auto-detected from either
-`~/models/Qwen3.8-Flash-Next-exl3-3.05bpw` or `~/models/Qwen3.8-Flash-Next-EXL3`.
+the full 262,144 context, `GPU_MEM_UTIL=0.80`, `MAX_NUM_SEQS=4`,
+`--enable-prefix-caching`, `--reasoning-parser qwen3`, `--tool-call-parser qwen3_xml`.
+The container's entrypoint is `scripts/serve_one_spark_qwen.sh`, and every knob
+in it can be set in `.env` or on the command line. Load takes about 9.5 minutes
+from cold NVMe and roughly 2.5 minutes when the pack is still in page cache.
+`start.sh` follows the log until `/health` answers. Compilation caches go to
+`CACHE_DIR` (default `~/.cache/qwen38-exl3-vllm`), so later boots skip
+`torch.compile`.
 
-```bash
-bash scripts/serve_one_spark_qwen.sh
-```
+`start.sh` checks these before it launches anything: the image exists, the pack
+is prepared, `GPU_MEM_UTIL` is at or below the measured-safe 0.85, and no other
+process holds the GPU (`REQUIRE_IDLE_GPU=false` turns that check off). The API
+binds to `127.0.0.1`. To serve the network, set `BIND=0.0.0.0` and an `API_KEY`.
 
 For workloads that routinely exceed 163,840 prompt tokens, turn the draft off.
 Past the acceptance cliff it is a net loss of roughly 21%, see
 [Context and the MTP acceptance cliff](#context-and-the-mtp-acceptance-cliff):
 
 ```bash
-SPEC_CONFIG=none bash scripts/serve_one_spark_qwen.sh
+SPEC_CONFIG=none ./start.sh
 ```
 
 Other depths, noting that vLLM's `num_speculative_tokens` counts *drafted*
 tokens, so k=3 drafts three and verifies up to four per step:
 
 ```bash
-SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":2}' bash scripts/serve_one_spark_qwen.sh
+SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":2}' ./start.sh
 ```
 
 To serve the 4.05 bpw revision at the full context, keep the n-gram table on
@@ -343,19 +322,20 @@ lookup has to stay outside CUDA graphs (PIECEWISE-only), see
 [The 4.05 bpw revision](#the-405-bpw-revision):
 
 ```bash
-MODEL_DIR=~/models/Qwen3.8-Flash-Next-exl3-4.05bpw NGRAM_TABLE=disk bash scripts/serve_one_spark_qwen.sh
+export REVISION=4.05bpw_h6_ng6 MODEL_DIR=~/models/Qwen3.8-Flash-Next-exl3-4.05bpw
+./download.sh
+NGRAM_TABLE=disk ./start.sh
 ```
 
-Defaults are `MAX_MODEL_LEN=262144`, `GPU_MEM_UTIL=0.80`, `MAX_NUM_SEQS=4`,
-`MAMBA_SSM_DTYPE=bfloat16`, port 8899, `--enable-prefix-caching`,
-`--reasoning-parser qwen3`. Load takes about 9.5 minutes from cold NVMe and
-roughly 2.5 minutes when the pack is still in page cache. See the script for
-every override (`PORT`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL`, `MAX_NUM_SEQS`,
-`SPEC_CONFIG`, `MAMBA_SSM_DTYPE`, `SERVED_NAME`, `PROFILER_DIR`,
-`NGRAM_TABLE=resident|disk`) and `VLLM_EXL3_NGRAM_KERNEL=ext|torch` (default
-`ext`) for the n-gram embedding kernel.
+Serving overrides: `PORT`, `BIND`, `API_KEY`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL`,
+`MAX_NUM_SEQS`, `SPEC_CONFIG`, `MAMBA_SSM_DTYPE`, `SERVED_NAME`, `PROFILER_DIR`,
+`NGRAM_TABLE=resident|disk`, `VLLM_EXL3_NGRAM_KERNEL=ext|torch`,
+`TOOL_CALL_PARSER`. `EXTRA_VLLM_ARGS` is appended to `vllm serve` and
+`EXTRA_DOCKER_ARGS` to `docker run`. `./start.sh --no-launch` prints the
+`docker run` command without starting anything. `./stop.sh` stops the container
+gracefully and saves its log under `logs/`.
 
-### 6. Benchmark
+### 4. Benchmark
 
 ```bash
 # Decode tok/s, excluding TTFT
@@ -366,6 +346,22 @@ python scripts/bench_v1.py --base-url http://127.0.0.1:8899/v1 --model Qwen3.8-F
 written to measure on this engine; see
 [How things were measured](#how-things-were-measured). Use the
 `spec_decode_num_accepted_tokens` counters from `/metrics` instead.
+
+### Without Docker
+
+The image is a record of the manual install. To run the stack in a venv instead:
+
+1. `bash scripts/setup_env.sh` creates `~/venvs/vllm-exl3` with `vllm==0.29.0` and
+   the plugin, and applies the three vLLM patches.
+2. It does not build `exllamav3`. Build v1.4.7 from source after
+   `python <vllm-exl3>/tools/patch_exllamav3_aarch64.py exllamav3/exllamav3_ext`,
+   the same steps as [`docker/Dockerfile`](docker/Dockerfile). The plugin
+   imports the compiled `exllamav3_ext`, so the pure-Python wheel is not
+   enough.
+3. Prepare the pack with `PACK_DIR=<pack> PLUGIN_REPO=<vllm-exl3 checkout> bash scripts/prepare_pack.sh`.
+4. Check the environment with `python scripts/preflight.py --pack <pack>`.
+5. Serve with `MODEL_DIR=<pack> bash scripts/serve_one_spark_qwen.sh`, which
+   takes the same variables as `start.sh`.
 
 ## Benchmarks: exllamav3 native
 
@@ -1292,14 +1288,14 @@ head, so it is not usable yet. NVFP4 does not fit on one Spark for this model:
 
 | Symptom | Cause / fix |
 |---|---|
-| `EXL3 n-gram table: N of 128 shards never loaded` | `model.safetensors.index.json` was not regenerated; run `scripts/prepare_pack.sh` (step 3) |
-| loading consumes all memory and dies with `CUDACachingAllocator ... memory mapping failed with OOM`, or is killed partway through | the n-gram table was allocated dense at ~95 GiB rather than 30.4 GiB packed because vLLM had no quant_config for it. Run `patch_vllm_qwen4_ple.py` (step 4). Confirm with `EXL3 n-gram embedding ready: ... 30.40 GiB packed` in the log. |
+| `EXL3 n-gram table: N of 128 shards never loaded` | `model.safetensors.index.json` was not regenerated; run `./download.sh --prepare-only` |
+| loading consumes all memory and dies with `CUDACachingAllocator ... memory mapping failed with OOM`, or is killed partway through | the n-gram table was allocated dense at ~95 GiB rather than 30.4 GiB packed because vLLM had no quant_config for it. The image applies `patch_vllm_qwen4_ple.py` at build time; if you see this, the image predates the patch or you are outside Docker, so rebuild with `./build.sh` (or run the patch in your venv). Confirm with `EXL3 n-gram embedding ready: ... 30.40 GiB packed` in the log. |
 | `ValueError: There is no module or parameter named 'lm_head.mul1'` | run `patch_vllm_qwen4_ple.py`; with an MTP draft, `patch_vllm_mtp_lmhead.py` as well |
 | `ValueError: There is no module or parameter named 'blocks.0.attn.k_proj'` | run `patch_vllm_vision_split.py` |
 | `ModuleNotFoundError: No module named 'exllamav3_ext'` | build exllamav3 1.4.7 from source with the aarch64 patch; the pure-Python wheel is not enough |
 | `ValueError: No available memory for the cache blocks` | `--gpu-memory-utilization` too low for weights plus KV; use 0.80 |
 | `ValueError: To serve at least one request with the model's max seq len ... larger than the available KV cache memory` | activation memory (usually a large `--max-num-batched-tokens`) ate the KV pool; lower the chunk or raise util to 0.85 |
-| boot OOMs within ~100 s of starting to load, `expandable_segments: memory mapping failed` with the device full, and the prep log said `ngram_embedding: None` | the pack's n-gram table is one unsharded tensor and got no quant spec, so it was allocated dense. Run `scripts/rename_unsharded_ngram.py <pack>` then `prepare_pack.sh` again; look for `n-gram embedding ready: 1 shards x ... packed` |
+| boot OOMs within ~100 s of starting to load, `expandable_segments: memory mapping failed` with the device full, and the prep log said `ngram_embedding: None` | the pack's n-gram table is one unsharded tensor and got no quant spec, so it was allocated dense. Run `scripts/rename_unsharded_ngram.py <pack>` then `./download.sh --prepare-only` again; look for `n-gram embedding ready: 1 shards x ... packed` |
 | `NotImplementedError: Qwen4Exp QSA requires a BF16 main KV cache` | `--kv-cache-dtype fp8` is not supported on this path; remove it |
 | `max_num_scheduled_tokens is set to 2048 based on the speculative decoding settings` | informational; raising the chunk was measured at +2%, ignore |
 | decode collapses to ~22 tok/s on very long prompts with MTP on | the acceptance cliff at 163,840 prompt tokens; use `SPEC_CONFIG=none` for that workload |

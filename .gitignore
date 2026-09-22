@@ -9,3 +9,4 @@ models/
 .hf-token
 *.safetensors
 *.gguf
+logs/

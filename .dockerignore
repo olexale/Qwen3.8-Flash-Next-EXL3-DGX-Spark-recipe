@@ -1,0 +1,6 @@
+# Allowlist: the build context is the repo root, which can sit next to
+# results/ or even an 80 GB pack. Send only what docker/Dockerfile COPYs.
+*
+!scripts/serve_one_spark_qwen.sh
+!scripts/prepare_pack.sh
+!scripts/preflight.py
