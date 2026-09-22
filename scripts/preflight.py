@@ -138,12 +138,16 @@ def check_vllm_exl3() -> Check:
     except ImportError:
         return Check("FAIL", "vllm_exl3", "not importable\nremedy: pip install git+https://github.com/vcruz305/vllm-exl3@main")
 
-    # Check that exl3 resolves through vllm's quantization registry
+    # Check that exl3 resolves through vllm's quantization registry. Newer
+    # plugin builds register lazily from their vllm.general_plugins entry
+    # point rather than on import, so load plugins the way `vllm serve` does.
     try:
+        from vllm.plugins import load_general_plugins
+        load_general_plugins()
         from vllm.model_executor.layers.quantization import get_quantization_config
         get_quantization_config("exl3")
     except Exception as e:
-        return Check("FAIL", "vllm_exl3", f"exl3 not in quantization registry: {e}")
+        return Check("FAIL", "vllm_exl3", f"exl3 not in quantization registry after loading vLLM plugins: {e}")
 
     return Check("PASS", "vllm_exl3", "importable and registered")
 
