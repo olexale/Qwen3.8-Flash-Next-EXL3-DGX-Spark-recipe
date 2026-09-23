@@ -68,13 +68,16 @@ RUN git clone "${EXLLAMAV3_REPO}" /opt/src/exllamav3 \
 # ---------------------------------------------------------------------------
 # 3. TabbyAPI. Base dependencies only: the cu12/cu13 extras would try to
 #    install x86 torch/exllamav3 wheels. torch is pinned by constraint so the
-#    resolver cannot swap it.
+#    resolver cannot swap it. uvloop is listed for x86_64 only, but main.py
+#    imports it on every non-Windows host; it has aarch64 wheels. The --help
+#    run catches startup import errors at build time, without a GPU or model.
 # ---------------------------------------------------------------------------
 RUN git clone "${TABBYAPI_REPO}" /app \
  && git -C /app checkout --quiet "${TABBYAPI_REF}" \
  && pip freeze | grep -E '^torch(==| @)' > /tmp/torch-constraint.txt \
- && pip install -c /tmp/torch-constraint.txt /app \
- && rm /tmp/torch-constraint.txt
+ && pip install -c /tmp/torch-constraint.txt /app uvloop \
+ && rm /tmp/torch-constraint.txt \
+ && cd /app && python3 main.py --help > /dev/null
 
 # TabbyAPI exposes dynamic_draft (chat.py's -dds) but not the confidence
 # target (-dc); the fork's Generator defaults it to 0.4, the launcher uses
