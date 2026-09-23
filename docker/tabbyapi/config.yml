@@ -1,0 +1,52 @@
+# TabbyAPI config for Qwen3.8-Flash-Next EXL3 (3.05bpw) on one DGX Spark.
+# Baked into the image as /app/config.yml; mount your own over it to change it.
+# Mirrors scripts/exl3_native/tuning/run-qwen38-exl3.sh:
+#   -mtp -ndt 5 -dds -dc 0.6 -cq 8,8 -cs 262144
+# (-dc comes from EXL3_DRAFT_CONFIDENCE, taskset from --cpuset-cpus, below.)
+#
+# Run (on the Spark):
+#   bash scripts/exl3_native/tuning/drop-model-cache.sh ~/models/Qwen3.8-Flash-Next-EXL3
+#   docker run -d --name qwen38-tabby --gpus all \
+#     --cpuset-cpus 5-9,15-19 \
+#     --security-opt no-new-privileges \
+#     -p 5000:5000 \
+#     -v ~/models/Qwen3.8-Flash-Next-EXL3:/models/Qwen3.8-Flash-Next-EXL3:ro \
+#     qwen38-exl3-tabby
+#   docker logs -f qwen38-tabby
+#
+# The drop-model-cache step matters on GB10: page cache counts against
+# GPU-allocatable memory, and autosplit refuses the pack if it looks tight.
+
+network:
+  # Published with -p 5000:5000, so reachable from the whole network.
+  host: 0.0.0.0
+  port: 5000
+  # No API key: anyone who can reach port 5000 can use the API, including the
+  # admin endpoints (load/unload model). Fine on a trusted internal network.
+  disable_auth: true
+
+logging:
+  log_prompt: false
+  log_generation_params: false
+  log_requests: false
+
+model:
+  model_dir: /models
+  model_name: Qwen3.8-Flash-Next-EXL3
+  backend: exllamav3
+  # The trained window and the measured ceiling (see the README's context section).
+  max_seq_len: 262144
+  cache_size: 262144
+  # 8-bit KV: faster at every depth on this geometry, acceptance unchanged.
+  cache_mode: 8,8
+  # Images via image_url content parts. The pack ships preprocessor_config.json,
+  # which is what makes exllamav3 load the vision tower.
+  vision: true
+
+draft_model:
+  # The model's own MTP head; no separate draft model.
+  draft_mode: mtp
+  # chat.py -cq applies to the draft cache too.
+  draft_cache_mode: 8,8
+  draft_num_tokens: 5
+  dynamic_draft: true
