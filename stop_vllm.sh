@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# stop.sh — stop and remove the serving container, keeping its log.
+# stop_vllm.sh — stop and remove the serving container, keeping its log.
 #
 # Graceful by default: vLLM gets SIGTERM and STOP_TIMEOUT seconds (default 30)
 # to release its shared-memory segments, which matter because the container
@@ -8,8 +8,8 @@
 # removed.
 #
 # Usage:
-#   ./stop.sh            # SIGTERM, then SIGKILL after STOP_TIMEOUT
-#   ./stop.sh --force    # SIGKILL now
+#   ./stop_vllm.sh            # SIGTERM, then SIGKILL after STOP_TIMEOUT
+#   ./stop_vllm.sh --force    # SIGKILL now
 # ============================================================================
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/scripts/docker_common.sh"

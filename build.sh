@@ -70,4 +70,4 @@ fi
 
 info ""
 info "Next: ./download.sh   (fetch + prepare the pack, ~80 GB)"
-info "then: ./start.sh"
+info "then: ./start_vllm.sh"

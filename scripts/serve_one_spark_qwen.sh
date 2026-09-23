@@ -2,7 +2,7 @@
 # Serve turboderp's Qwen3.8-Flash-Next EXL3 pack (native quantization_config,
 # after scripts/prepare_pack.sh) from a local vLLM + exllamav3 + vllm-exl3
 # installation on one DGX Spark (GB10). It is also the entrypoint of the
-# Docker image (docker/Dockerfile, launched by ./start.sh). Any arguments are
+# Docker image (docker/Dockerfile, launched by ./start_vllm.sh). Any arguments are
 # appended to the vllm serve command line.
 set -euo pipefail
 

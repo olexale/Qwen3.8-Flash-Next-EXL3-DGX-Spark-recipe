@@ -71,4 +71,4 @@ if $DO_PREPARE; then
 fi
 
 info ""
-info "Next: ./start.sh"
+info "Next: ./start_vllm.sh"

@@ -196,8 +196,9 @@ launcher, `bench.sh`, the A/B matrix scripts, and their logs.
 ### As an API server in Docker
 
 [`docker/tabbyapi/`](docker/tabbyapi/README.md) builds TabbyAPI on the tuned
-fork with the launcher's settings: an OpenAI-compatible API on port 5000, with
-image input. Nothing is installed on the host.
+fork with the launcher's settings: an OpenAI-compatible API with image input.
+Nothing is installed on the host. `./start_tabby.sh --build` builds and starts
+it, `./stop_tabby.sh` stops it; both read `.env` like the vLLM scripts.
 
 ## Quick start: vLLM path
 
@@ -214,8 +215,8 @@ the repo root do the rest, the same way as the
 cp .env.sample .env      # edit if you want; the defaults are the measured-best profile
 ./build.sh               # patched vLLM image, then a GPU preflight inside it
 ./download.sh            # ~80 GB pack into MODEL_DIR, then prepare it for vllm-exl3
-./start.sh               # serve on 127.0.0.1:8899, follow the log until /health answers
-./stop.sh
+./start_vllm.sh               # serve on 127.0.0.1:8899, follow the log until /health answers
+./stop_vllm.sh
 ```
 
 Needs Docker with the NVIDIA container runtime (stock on DGX OS) and NVMe with
@@ -288,7 +289,7 @@ a pack that would OOM at boot.
 ### 3. Serve
 
 ```bash
-./start.sh
+./start_vllm.sh
 ```
 
 Defaults are the measured-best configuration: MTP k=3, bf16 recurrent state,
@@ -297,11 +298,11 @@ the full 262,144 context, `GPU_MEM_UTIL=0.80`, `MAX_NUM_SEQS=4`,
 The container's entrypoint is `scripts/serve_one_spark_qwen.sh`, and every knob
 in it can be set in `.env` or on the command line. Load takes about 9.5 minutes
 from cold NVMe and roughly 2.5 minutes when the pack is still in page cache.
-`start.sh` follows the log until `/health` answers. Compilation caches go to
+`start_vllm.sh` follows the log until `/health` answers. Compilation caches go to
 `CACHE_DIR` (default `~/.cache/qwen38-exl3-vllm`), so later boots skip
 `torch.compile`.
 
-`start.sh` checks these before it launches anything: the image exists, the pack
+`start_vllm.sh` checks these before it launches anything: the image exists, the pack
 is prepared, `GPU_MEM_UTIL` is at or below the measured-safe 0.85, and no other
 process holds the GPU (`REQUIRE_IDLE_GPU=false` turns that check off). The API
 binds to `127.0.0.1`. To serve the network, set `BIND=0.0.0.0` and an `API_KEY`.
@@ -311,14 +312,14 @@ Past the acceptance cliff it is a net loss of roughly 21%, see
 [Context and the MTP acceptance cliff](#context-and-the-mtp-acceptance-cliff):
 
 ```bash
-SPEC_CONFIG=none ./start.sh
+SPEC_CONFIG=none ./start_vllm.sh
 ```
 
 Other depths, noting that vLLM's `num_speculative_tokens` counts *drafted*
 tokens, so k=3 drafts three and verifies up to four per step:
 
 ```bash
-SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":2}' ./start.sh
+SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":2}' ./start_vllm.sh
 ```
 
 To serve the 4.05 bpw revision at the full context, keep the n-gram table on
@@ -330,15 +331,15 @@ lookup has to stay outside CUDA graphs (PIECEWISE-only), see
 ```bash
 export REVISION=4.05bpw_h6_ng6 MODEL_DIR=~/models/Qwen3.8-Flash-Next-exl3-4.05bpw
 ./download.sh
-NGRAM_TABLE=disk ./start.sh
+NGRAM_TABLE=disk ./start_vllm.sh
 ```
 
 Serving overrides: `PORT`, `BIND`, `API_KEY`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL`,
 `MAX_NUM_SEQS`, `SPEC_CONFIG`, `MAMBA_SSM_DTYPE`, `SERVED_NAME`, `PROFILER_DIR`,
 `NGRAM_TABLE=resident|disk`, `VLLM_EXL3_NGRAM_KERNEL=ext|torch`,
 `TOOL_CALL_PARSER`. `EXTRA_VLLM_ARGS` is appended to `vllm serve` and
-`EXTRA_DOCKER_ARGS` to `docker run`. `./start.sh --no-launch` prints the
-`docker run` command without starting anything. `./stop.sh` stops the container
+`EXTRA_DOCKER_ARGS` to `docker run`. `./start_vllm.sh --no-launch` prints the
+`docker run` command without starting anything. `./stop_vllm.sh` stops the container
 gracefully and saves its log under `logs/`.
 
 ### 4. Benchmark
@@ -367,7 +368,7 @@ The image is a record of the manual install. To run the stack in a venv instead:
 3. Prepare the pack with `PACK_DIR=<pack> PLUGIN_REPO=<vllm-exl3 checkout> bash scripts/prepare_pack.sh`.
 4. Check the environment with `python scripts/preflight.py --pack <pack>`.
 5. Serve with `MODEL_DIR=<pack> bash scripts/serve_one_spark_qwen.sh`, which
-   takes the same variables as `start.sh`.
+   takes the same variables as `start_vllm.sh`.
 
 ## Benchmarks: exllamav3 native
 

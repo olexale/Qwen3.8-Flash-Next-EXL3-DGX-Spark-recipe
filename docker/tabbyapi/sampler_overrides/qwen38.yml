@@ -1,0 +1,14 @@
+# Fallback sampling for Qwen3.8-Flash-Next, from the pack's generation_config.json
+# (temperature 1.0, top_k 20, top_p 0.95). Selected by sampling.override_preset in
+# config.yml. force: false, so a request that sets a value keeps its own.
+# Without a preset, TabbyAPI samples requests that omit these untruncated
+# (top_k 0, top_p 1.0), which also lowers MTP draft acceptance.
+temperature:
+  override: 1.0
+  force: false
+top_k:
+  override: 20
+  force: false
+top_p:
+  override: 0.95
+  force: false

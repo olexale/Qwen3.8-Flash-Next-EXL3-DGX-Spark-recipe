@@ -10,10 +10,11 @@
 #      the GB10 decode changes), extension compiled ahead of time for sm_121
 #   3. TabbyAPI base dependencies, plus a one-line patch that passes the
 #      fork's draft_confidence (chat.py's -dc) through to the Generator
+#   4. a patch that keeps exllamav3's recurrent-state checkpoints on the
+#      device (patch_exllamav3_checkpoints.py)
 #
-# Build on the Spark (the build needs no GPU):
-#   docker build -t qwen38-exl3-tabby docker/tabbyapi
-# Run it: see the "Run" block in docker/tabbyapi/config.yml.
+# Build on the Spark (the build needs no GPU), from the repo root:
+#   ./start_tabby.sh --build      (or: docker build -t qwen38-exl3-tabby docker/tabbyapi)
 # ============================================================================
 ARG BASE_IMAGE=nvidia/cuda:13.0.2-devel-ubuntu24.04
 FROM ${BASE_IMAGE}
@@ -87,17 +88,27 @@ RUN f=/app/backends/exllamav3/model.py \
  && sed -i 's/^                dynamic_draft_tokens=self.dynamic_draft,$/&\n                draft_confidence=float(__import__("os").environ.get("EXL3_DRAFT_CONFIDENCE", "0.6")),/' "$f" \
  && grep -q 'EXL3_DRAFT_CONFIDENCE' "$f"
 
+# Recurrent-state checkpoints stay on the device instead of blocking copies to
+# pageable host memory; see the script. Fails the build if an anchor moved.
+COPY patch_exllamav3_checkpoints.py /tmp/
+RUN python3 /tmp/patch_exllamav3_checkpoints.py && rm /tmp/patch_exllamav3_checkpoints.py
+
+# Fallback sampling for requests that set none: the model's generation_config.json
+COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
+COPY --chmod=755 entrypoint.sh /app/entrypoint.sh
 
 # ---------------------------------------------------------------------------
 # 4. The GB10 launcher's knobs (scripts/exl3_native/tuning/run-qwen38-exl3.sh).
-#    Any of them can be overridden with docker run -e.
+#    Any of them can be overridden with docker run -e. One departure from the
+#    launcher: EXL3_NGRAM_STREAM=1 streams the n-gram table from NVMe. The
+#    launcher's 0 loads all ~30 GiB of it into RAM, which measured no faster.
 # ---------------------------------------------------------------------------
 ENV EXL3_INT8_GEMV=0 \
     EXL3_MOE_COOP_WIDE=1 \
     EXL3_GR_INT8=1 \
     EXL3_MTP_HEAD_N=65536 \
-    EXL3_NGRAM_STREAM=0 \
+    EXL3_NGRAM_STREAM=1 \
     EXL3_DRAFT_CONFIDENCE=0.6
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
@@ -115,4 +126,6 @@ USER tabby
 
 WORKDIR /app
 EXPOSE 5000
-ENTRYPOINT ["python3", "main.py"]
+# entrypoint.sh drops the model's page cache, then runs main.py with the
+# container's arguments (e.g. --model-name).
+ENTRYPOINT ["/app/entrypoint.sh"]

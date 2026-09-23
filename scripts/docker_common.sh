@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by build.sh, download.sh, start.sh and stop.sh. Source, don't run.
+# Shared by build.sh, download.sh and the start_*/stop_* scripts. Source, don't run.
 
 info() { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 ok()   { echo -e "\033[1;32m[ OK ]\033[0m  $*"; }
@@ -10,7 +10,7 @@ RECIPE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Source .env with the precedence environment > .env > built-in default:
 # anything already set in the environment survives the source, so
-# `PORT=9000 ./start.sh` works without editing .env.
+# `PORT=9000 ./start_vllm.sh` works without editing .env.
 load_env() {
     local f="$RECIPE_DIR/.env" n i
     local names=() vals=()

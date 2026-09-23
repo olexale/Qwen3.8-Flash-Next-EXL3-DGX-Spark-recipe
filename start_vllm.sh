@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# start.sh — serve the prepared EXL3 pack from the patched image on one
+# start_vllm.sh — serve the prepared EXL3 pack from the patched image on one
 # DGX Spark, then follow the log until /health answers.
 #
 # The container runs scripts/serve_one_spark_qwen.sh (the image entrypoint)
@@ -8,11 +8,11 @@
 # so the defaults and their reasoning live in one place: that script.
 #
 # Usage:
-#   ./start.sh                              # profile from .env
-#   ./start.sh --no-launch                  # print the docker command, don't start
-#   SPEC_CONFIG=none ./start.sh             # no MTP draft (prompts past ~163k tokens)
-#   NGRAM_TABLE=disk MODEL_DIR=~/models/Qwen3.8-Flash-Next-exl3-4.05bpw ./start.sh
-#   EXTRA_VLLM_ARGS="--max-num-batched-tokens 4096" ./start.sh
+#   ./start_vllm.sh                              # profile from .env
+#   ./start_vllm.sh --no-launch                  # print the docker command, don't start
+#   SPEC_CONFIG=none ./start_vllm.sh             # no MTP draft (prompts past ~163k tokens)
+#   NGRAM_TABLE=disk MODEL_DIR=~/models/Qwen3.8-Flash-Next-exl3-4.05bpw ./start_vllm.sh
+#   EXTRA_VLLM_ARGS="--max-num-batched-tokens 4096" ./start_vllm.sh
 # ============================================================================
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/scripts/docker_common.sh"
@@ -56,7 +56,7 @@ if [[ -n "${GPU_MEM_UTIL:-}" ]] && awk -v u="$GPU_MEM_UTIL" 'BEGIN{exit !(u > 0.
 fi
 
 if docker ps -q -f "name=^${CONTAINER_NAME}\$" | grep -q .; then
-    err "$CONTAINER_NAME is already running. ./stop.sh first."
+    err "$CONTAINER_NAME is already running. ./stop_vllm.sh first."
 fi
 
 if $DO_LAUNCH && [[ "$REQUIRE_IDLE_GPU" == "true" ]] && command -v nvidia-smi >/dev/null 2>&1; then
@@ -149,13 +149,13 @@ while true; do
         docker logs "$CONTAINER_NAME" 2>&1 \
             | grep -iE "GPU KV cache size|Available KV cache|Maximum concurrency" | tail -3 || true
         info "Test:  curl http://$HEALTH_HOST:$PORT/v1/models${API_KEY:+ -H 'Authorization: Bearer \$API_KEY'}"
-        info "Stop:  ./stop.sh"
+        info "Stop:  ./stop_vllm.sh"
         exit 0
     fi
     if (( ELAPSED > READY_TIMEOUT_S )); then
         kill $LOGPID 2>/dev/null || true
         echo
         err "Not ready after ${ELAPSED}s (READY_TIMEOUT_S=$READY_TIMEOUT_S). The container is still running;
-       inspect with: docker logs $CONTAINER_NAME   stop with: ./stop.sh"
+       inspect with: docker logs $CONTAINER_NAME   stop with: ./stop_vllm.sh"
     fi
 done

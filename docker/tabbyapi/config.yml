@@ -2,20 +2,10 @@
 # Baked into the image as /app/config.yml; mount your own over it to change it.
 # Mirrors scripts/exl3_native/tuning/run-qwen38-exl3.sh:
 #   -mtp -ndt 5 -dds -dc 0.6 -cq 8,8 -cs 262144
-# (-dc comes from EXL3_DRAFT_CONFIDENCE, taskset from --cpuset-cpus, below.)
+# (-dc comes from EXL3_DRAFT_CONFIDENCE in the image, taskset from start_tabby.sh.)
 #
-# Run (on the Spark):
-#   bash scripts/exl3_native/tuning/drop-model-cache.sh ~/models/Qwen3.8-Flash-Next-EXL3
-#   docker run -d --name qwen38-tabby --gpus all \
-#     --cpuset-cpus 5-9,15-19 \
-#     --security-opt no-new-privileges \
-#     -p 5000:5000 \
-#     -v ~/models/Qwen3.8-Flash-Next-EXL3:/models/Qwen3.8-Flash-Next-EXL3:ro \
-#     qwen38-exl3-tabby
-#   docker logs -f qwen38-tabby
-#
-# The drop-model-cache step matters on GB10: page cache counts against
-# GPU-allocatable memory, and autosplit refuses the pack if it looks tight.
+# Start and stop with ./start_tabby.sh and ./stop_tabby.sh in the repo root
+# (docker/tabbyapi/README.md).
 
 network:
   # Published with -p 5000:5000, so reachable from the whole network.
@@ -39,6 +29,10 @@ model:
   cache_size: 262144
   # 8-bit KV: faster at every depth on this geometry, acceptance unchanged.
   cache_mode: 8,8
+  # Prefill chunk. The expert weights are dequantized once per chunk, so larger
+  # chunks prefill faster: 20k cold prompt 42.8 s at 2048, 31.7 s at 4096,
+  # 26.7 s at 8192 (TabbyAPI's default is 2048).
+  chunk_size: 8192
   # Images via image_url content parts. The pack ships preprocessor_config.json,
   # which is what makes exllamav3 load the vision tower.
   vision: true
@@ -50,3 +44,8 @@ draft_model:
   draft_cache_mode: 8,8
   draft_num_tokens: 5
   dynamic_draft: true
+
+sampling:
+  # Fallback sampling for requests that omit it: the model's generation_config.json
+  # (sampler_overrides/qwen38.yml). Values a request sets are kept.
+  override_preset: qwen38
