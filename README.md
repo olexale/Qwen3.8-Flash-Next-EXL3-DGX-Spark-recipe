@@ -193,6 +193,12 @@ CUDA first so the kernel reclaims the cache.
 Scripts are in `scripts/exl3_native/`; `scripts/exl3_native/tuning/` holds the
 launcher, `bench.sh`, the A/B matrix scripts, and their logs.
 
+### As an API server in Docker
+
+[`docker/tabbyapi/`](docker/tabbyapi/README.md) builds TabbyAPI on the tuned
+fork with the launcher's settings: an OpenAI-compatible API on port 5000, with
+image input. Nothing is installed on the host.
+
 ## Quick start: vLLM path
 
 Use this path when you need the OpenAI API with reasoning/tool-call parsers,
