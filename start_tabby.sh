@@ -9,6 +9,8 @@
 # this script uses start with TABBY_. Engine settings (context, cache, draft,
 # chunk size, vision, sampling) are in docker/tabbyapi/config.yml, baked into
 # the image; TABBY_CONFIG mounts a different one without rebuilding.
+# Kernel tuning results persist in the Docker volume TABBY_CACHE_VOLUME, so
+# only the very first start pays for tuning.
 #
 # The container restarts by itself after a crash or a reboot
 # (TABBY_RESTART=unless-stopped) until ./stop_tabby.sh stops it.
@@ -46,6 +48,7 @@ TABBY_CONTAINER="${TABBY_CONTAINER:-qwen38-tabby}"
 TABBY_CPUSET="${TABBY_CPUSET:-5-9,15-19}"
 TABBY_RESTART="${TABBY_RESTART:-unless-stopped}"
 TABBY_CONFIG="${TABBY_CONFIG:-}"
+TABBY_CACHE_VOLUME="${TABBY_CACHE_VOLUME-qwen38-tabby-cache}"
 TABBY_READY_TIMEOUT_S="${TABBY_READY_TIMEOUT_S:-600}"
 TABBY_EXTRA_DOCKER_ARGS="${TABBY_EXTRA_DOCKER_ARGS:-}"
 

@@ -127,10 +127,22 @@ RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version(
  && cat /app/BUILD_INFO
 
 # Unprivileged runtime user. It owns /app because TabbyAPI writes
-# api_tokens.yml there when auth is enabled in config.yml.
+# api_tokens.yml there when auth is enabled in config.yml. It also owns
+# ~/.cache, where start_tabby.sh mounts a volume (below).
 RUN useradd --create-home --uid 10001 tabby \
- && chown -R tabby:tabby /app
+ && mkdir -p /home/tabby/.cache \
+ && chown -R tabby:tabby /app /home/tabby/.cache
 USER tabby
+
+# Kernel tuning results survive restarts: exllamav3's GEMM autotuner and
+# Triton's (the GatedDeltaNet kernels) write them to ~/.cache, which
+# start_tabby.sh keeps in a Docker volume. Without it every new container
+# tunes again: about 20 s on the first request and about 1 s on the first
+# prompt of each new shape. The exllamav3 file is named after the engine
+# commit, so a rebuild on another commit starts a fresh one.
+ENV EXLLAMAV3_TUNE_CACHE=/home/tabby/.cache/exllamav3-autotune-${EXLLAMAV3_REF}.bin \
+    TRITON_CACHE_DIR=/home/tabby/.cache/triton \
+    TRITON_CACHE_AUTOTUNING=1
 
 WORKDIR /app
 EXPOSE 5000
