@@ -142,10 +142,11 @@ copying them to RAM), and the `qwen38` sampler preset (the model's own
 sampling defaults for requests that set none; without it TabbyAPI samples
 untruncated and fewer drafted tokens are accepted).
 
-Short prompts still take about 3 s to the first token. That is the engine's
-MoE prefill for this pack: its expert weights do not qualify for exllamav3's
-fused prefill kernel, so small prefills run one expert at a time. Settings
-cannot change that.
+Short prompts still take about 3 s to the first token. A profile of a
+600-token prefill shows the MoE layers issuing about 23,000 small per-expert
+operations. Why the fused MoE path is not taking them is not known yet: the
+pack's gate, up and down experts share one codebook (`mul1`, 3-bit), so the
+codebook check is not the reason. See [OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md).
 
 ## Access and safety
 
