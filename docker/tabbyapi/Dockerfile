@@ -11,7 +11,8 @@
 #   3. TabbyAPI base dependencies, plus a one-line patch that passes the
 #      fork's draft_confidence (chat.py's -dc) through to the Generator
 #   4. a patch that keeps exllamav3's recurrent-state checkpoints on the
-#      device (patch_exllamav3_checkpoints.py)
+#      device (patch_exllamav3_checkpoints.py), and one that re-enables the
+#      fused MoE prefill kernel (patch_exllamav3_fused_moe.py)
 #
 # Build on the Spark (the build needs no GPU), from the repo root:
 #   ./start_tabby.sh --build      (or: docker build -t qwen38-exl3-tabby docker/tabbyapi)
@@ -93,6 +94,12 @@ RUN f=/app/backends/exllamav3/model.py \
 COPY patch_exllamav3_checkpoints.py /tmp/
 RUN python3 /tmp/patch_exllamav3_checkpoints.py && rm /tmp/patch_exllamav3_checkpoints.py
 
+# The fused multi-expert MoE kernel for prefill, which the fork switches off for
+# packs like this one (all experts share one K); see the script. Applied, but
+# off by default until it is approved: EXL3_MOE_FUSED_UNIFORM=1 turns it on.
+COPY patch_exllamav3_fused_moe.py /tmp/
+RUN python3 /tmp/patch_exllamav3_fused_moe.py && rm /tmp/patch_exllamav3_fused_moe.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
@@ -109,7 +116,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_GR_INT8=1 \
     EXL3_MTP_HEAD_N=65536 \
     EXL3_NGRAM_STREAM=1 \
-    EXL3_DRAFT_CONFIDENCE=0.6
+    EXL3_DRAFT_CONFIDENCE=0.6 \
+    EXL3_MOE_FUSED_UNIFORM=0
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
