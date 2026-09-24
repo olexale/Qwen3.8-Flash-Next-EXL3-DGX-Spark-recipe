@@ -472,3 +472,63 @@ mostly the in-kernel trellis decode. +6% to reach 1,100 tok/s means making
 the MoE ~20% faster (or the rest of the chunk ~10% faster): CUDA work in
 `exl3_moe_kernel.cuh` / the batched-reconstruct tier, estimated at days, with
 the per-layer parity and greedy gates above. Not started; the owner's call.
+
+### Kernel work for long prompts (2026-09-24, approved)
+
+**Tried on the fused MoE kernel, no gain:**
+
+- A 128-row GEMM tile (a new `exl3_moe` instance with two shared-memory
+  stages, for experts with more than 64 rows), to decode each expert's weights
+  half as often. Bit-identical output, but 0.65–0.84x the speed at 512–8,192
+  rows: at the 128-register budget of the kernel's 512-thread blocks it spills
+  (696 B of stack vs 256 B for the 64-row tile). Not shipped; the premise that
+  weight decode dominates was wrong.
+- SMs per expert group (`MOE_SMS_PER_EXPERT`, 8 in the fork) made a run-time
+  setting and swept 4 / 5 / 6 / 8 / 12 / 16: 4 is best by 3–4% on the MoE layer,
+  ~1% end to end. Not shipped.
+
+**Where an 8,192-token prompt's time actually goes** (`tools/module_times.py`,
+device sync around every module, exclusive time, 8.4 s total): MoE 3.1 s,
+the transformer blocks' own code 2.2 s (48 x 46 ms), attention 1.1 s,
+GatedDeltaNet 0.7 s, dense projections ~0.8 s. The blocks' own time is the
+hyper-connection mixer (`GatedResidual.mix`, twice per block): for more than 32
+rows the fork finishes it in torch,
+
+    mixed = (sigmoid(g.float()).view(R, H, D) * normed.float().view(R, H, D)).mean(-2).half()
+
+which builds four fp32 temporaries of R x 4 x 2560 (~335 MB each at 8,192 rows).
+
+**Shipped: `patch_exllamav3_gr_collapse.py`**, a CUDA kernel (`ext.gr_collapse`)
+that does it in one pass over fp16 inputs. It is **bit-identical** to the torch
+expression: same summation order (torch's mean over 4 is sequential), same
+sigmoid (`1 / (1 + expf(-x))` with libdevice's `expf`, called by name because
+the extension is built with `--use_fast_math`), IEEE multiply / add / divide.
+On 40 real calls (107–8,192 rows): 0 of 590M output elements differ; 2.9x
+faster (532 → 184 ms total). `EXL3_GR_COLLAPSE=0` restores the torch path.
+Engine benchmark, chunk 8192, fused MoE on (the first variant of the kernel,
+same speed as the shipped one):
+
+| | cold 600 | cold 3k | cold 12k | cold 20k | cold 40k | follow-up 20k + 600 |
+|---|---:|---:|---:|---:|---:|---:|
+| without | 1.20 s | 3.63 s | 12.3 s (976 tok/s) | 19.9 s (1,009) | 38.3 s (1,046) | 1.36 s |
+| with `gr_collapse` | 1.12 s | 3.22 s | 10.6 s (1,139) | 16.9 s (1,184) | 32.3 s (**1,238**) | 1.26 s |
+
+Through the API after deploying (2026-09-24): cold 24.5k prompt 20.8 s (24.2
+before, ~1,180 tok/s); three cold ~115k prompts 1,228–1,233 tok/s (1,035–1,041
+before); follow-ups on them 1.15–1.57 s server-side, 99% cached; cold 573-token
+prompt 1.11 s; follow-up 25k + 853 new 1.52 s; decode 54.0 tok/s one session
+(10 runs, 49.7–60.6), 53.9 three at once; memory 79.0 GiB system-wide. The
+collapse kernel only runs above 32 rows, so decode (≤ 18 rows here) cannot
+touch it.
+
+### Where the targets stand (2026-09-24)
+
+| | Before | Now (API) | Target |
+|---|---:|---:|---:|
+| Follow-up: cached history + ~600–900 new | 3.3–3.6 s | 1.5 s at 25k (1.2–1.6 s server-side at 115k) | ≤ 1.5 s |
+| Cold 600-token prompt | 3.9 s | 1.1 s | ≤ 1.5 s |
+| Cold prefill, long prompts | ~840 tok/s | ~1,230 tok/s | ≥ 1,100 |
+| Full-context sessions cached | 1 | 3 | 3 |
+| Decode | ~56 tok/s (one sample) | 54 tok/s (median of 10), 54 with three sessions (was 26) | not lower |
+
+Left open: T5 (prompt-lookup drafting) needs a recorded pi session.

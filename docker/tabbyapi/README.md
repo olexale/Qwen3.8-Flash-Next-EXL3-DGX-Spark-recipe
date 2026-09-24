@@ -120,6 +120,7 @@ passes them to the container.
 | `EXL3_INT8_GEMV` | `0` | int8 GEMV off (slower on GB10) |
 | `EXL3_MTP_HEAD_N` | `65536` | draft uses a 64K-column slice of the output head |
 | `EXL3_NGRAM_STREAM` | `1` | read the ~30 GiB n-gram table from NVMe as needed; `0` loads all of it into RAM (no faster, about 30 GiB more memory) |
+| `EXL3_GR_COLLAPSE` | `1` | the fused hyper-connection collapse kernel (`patch_exllamav3_gr_collapse.py`); `0` = the fork's torch code, ~18% slower long prompts |
 | `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
@@ -131,12 +132,12 @@ Measured 2026-09-24 through the API:
 | | |
 |---|---|
 | Memory in use while serving | about 72 GiB of device memory plus 4 GiB host with three ~115k-token conversations cached; system total under 80 GiB |
-| Prefill, cold prompt | about 1,000–1,040 tok/s (24k-token prompt: 24 s; 115k: 111 s) |
-| Cold short prompt, ~600 tokens | about 1.3 s to first token |
-| Follow-up turn, cached history + ~850 new tokens | about 1.6 s on a 25k conversation, 1.7–2.1 s on 115k |
+| Prefill, cold prompt | about 1,180–1,230 tok/s (24k-token prompt: 21 s; 115k: 94 s) |
+| Cold short prompt, ~600 tokens | about 1.1 s to first token |
+| Follow-up turn, cached history + ~850 new tokens | about 1.5 s on a 25k conversation, 1.6–2.0 s on 115k (1.2–1.6 s server-side) |
 | Conversations kept in the prefix cache | three at full length (262,144 tokens each) |
 | Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–56), one session |
-| Decode, three sessions at once | about 55 tok/s together, ~18–20 each |
+| Decode, three sessions at once | about 54 tok/s together, ~18–20 each |
 | First request after start | under 2 s; only the very first start after a new image pays ~20 s of kernel tuning |
 
 What keeps it fast, so keep these when you edit:
@@ -146,6 +147,10 @@ What keeps it fast, so keep these when you edit:
   launch. The patch turns it back on (`EXL3_MOE_FUSED_UNIFORM=1`, the image
   default): short prompts and follow-up turns ~2x faster, long prompts ~20%,
   three concurrent sessions decode 2.1x faster (26 → 55 tok/s together).
+- `patch_exllamav3_gr_collapse.py`: a CUDA kernel for the hyper-connection
+  stream collapse that the fork runs in torch during prefill (four ~335 MB fp32
+  temporaries per call on an 8k chunk). Bit-identical output, long prompts ~18%
+  faster (`EXL3_GR_COLLAPSE=0` turns it off).
 - `chunk_size: 8192` in `config.yml` (TabbyAPI's default of 2048 is much slower;
   16384 is 1.7% faster still but needs 1.6 GiB more).
 - `patch_exllamav3_checkpoints.py` (recurrent-state checkpoints stay on the GPU
@@ -157,7 +162,7 @@ What keeps it fast, so keep these when you edit:
 
 The draft settings (5 tokens, confidence 0.6) were re-checked on sampled code,
 prose and tool-call output: no other combination was clearly faster.
-Tried, no help: `EXL3_MOE_COOP_WIDE=0`, no vision tower, the n-gram table in
+Tried, no help: a 128-row tile for the fused MoE kernel (register spills, slower), other MoE group widths, `EXL3_MOE_COOP_WIDE=0`, no vision tower, the n-gram table in
 RAM, other fused row limits, chunk 4096. Details:
 [OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md#results-2026-09-24).
 
