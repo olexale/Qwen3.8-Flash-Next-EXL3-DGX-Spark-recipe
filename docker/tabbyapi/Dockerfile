@@ -56,11 +56,16 @@ RUN pip install --upgrade pip setuptools wheel ninja \
 
 # ---------------------------------------------------------------------------
 # 2. exllamav3 fork, extension precompiled. The fork already carries the
-#    aarch64 guards, so no patch step. --no-build-isolation so setup.py sees
-#    the torch above; without it the extension is silently skipped.
+#    aarch64 guards. One source patch before the build: a fused kernel for the
+#    hyper-connection stream collapse in prefill (patch_exllamav3_gr_collapse.py,
+#    bit-identical to the torch code it replaces; EXL3_GR_COLLAPSE=0 turns it
+#    off). --no-build-isolation so setup.py sees the torch above; without it the
+#    extension is silently skipped.
 # ---------------------------------------------------------------------------
+COPY patch_exllamav3_gr_collapse.py /tmp/
 RUN git clone "${EXLLAMAV3_REPO}" /opt/src/exllamav3 \
  && git -C /opt/src/exllamav3 checkout --quiet "${EXLLAMAV3_REF}" \
+ && python3 /tmp/patch_exllamav3_gr_collapse.py /opt/src/exllamav3 \
  && cd /opt/src/exllamav3 \
  && TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" MAX_JOBS="${MAX_JOBS}" \
         pip install --no-build-isolation . \
