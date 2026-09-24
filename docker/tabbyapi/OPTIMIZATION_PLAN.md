@@ -458,3 +458,17 @@ Against the targets: follow-up ≤ 1.5 s — met at ~20k on the server side, 1.6
 the client with 850 new tokens; cold 600 ≤ 1.5 s — met; three cached sessions —
 met; decode — not lower (and 2.1x with three sessions); long prompts ≥ 1,100
 tok/s — **not met**, ~1,040. What is left there is the fused kernel itself.
+
+**Long prompts: what is left.** Knobs of the fused kernel on cold 40k (tok/s):
+default 1,026; `EXL3_MOE_TILE_N=128` 1,026; `EXL3_MOE_FUSED_DET=0` (atomic
+accumulation) 999; `EXL3_MOE_MTILE=0` 949. None helps. One 8,192-token chunk
+takes 7.95 s; one MoE layer at 8,192 real rows returns to the host in ~3 ms
+and finishes on the GPU in ~56 ms, so the MoE is GPU-bound, not host-bound:
+48 layers x 56 ms = 2.7 s (~34% of the chunk). At 8,192 rows ~105 experts per
+layer exceed the fused tier's 256 rows and take the batched-reconstruct tier
+(5,038 experts in 451 groups per chunk). The layer's floors are ~4 ms (weights)
+and ~8 ms (fp16 tensor math), so the kernel runs at ~7x its compute floor,
+mostly the in-kernel trellis decode. +6% to reach 1,100 tok/s means making
+the MoE ~20% faster (or the rest of the chunk ~10% faster): CUDA work in
+`exl3_moe_kernel.cuh` / the batched-reconstruct tier, estimated at days, with
+the per-layer parity and greedy gates above. Not started; the owner's call.
