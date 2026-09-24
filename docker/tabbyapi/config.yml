@@ -26,7 +26,9 @@ model:
   backend: exllamav3
   # The trained window and the measured ceiling (see the README's context section).
   max_seq_len: 262144
-  cache_size: 262144
+  # Room for three full-length conversations at once (pi runs up to three sessions);
+  # 8-bit KV is ~12 KB/token, so each extra 262,144 tokens is ~3 GiB.
+  cache_size: 786432
   # 8-bit KV: faster at every depth on this geometry, acceptance unchanged.
   cache_mode: 8,8
   # Prefill chunk. The expert weights are dequantized once per chunk, so larger
@@ -44,6 +46,13 @@ draft_model:
   draft_cache_mode: 8,8
   draft_num_tokens: 5
   dynamic_draft: true
+
+memory:
+  # Budget for recurrent-state checkpoints (MB), which let a follow-up turn resume
+  # from its cached prefix. One checkpoint is ~112 MiB (36 GatedDeltaNet layers);
+  # a long prompt leaves ~10-15 of them, so the default 4096 holds about one and a
+  # half full-length conversations and three would evict each other's.
+  sysmem_recurrent_cache: 8192
 
 sampling:
   # Fallback sampling for requests that omit it: the model's generation_config.json
