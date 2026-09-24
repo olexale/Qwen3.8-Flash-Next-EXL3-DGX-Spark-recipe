@@ -331,7 +331,7 @@ MoE. GatedDeltaNet, attention and the n-gram layer are small (<0.1 s each).
 
 **The fix** is `patch_exllamav3_fused_moe.py`: it moves the block back where
 upstream has it. `EXL3_MOE_FUSED_UNIFORM=0` restores the fork's behaviour. It
-is in the image, **off by default until the owner approves it** (T4).
+is in the image and on by default since T4 (below).
 
 Engine benchmark (`run_engine_bench.sh`, chunk 8192, TTFT in s; "repeat" is a
 second prompt of the same size, i.e. without one-time tuning):
@@ -432,3 +432,29 @@ flat at 45–48 tok/s in every cell; tool calls gain most from longer drafts
 | Full-context sessions cached | 1 | 3 | 3 | 3 |
 | Decode, 400-token code answer | ~56 tok/s | 45–59, median ~53 (6 samples, sampled output) | unchanged path | not lower |
 | First request after a start | ~8 s | 1.7 s | | |
+
+### T4: fused MoE kernel shipped (2026-09-24, approved)
+
+`EXL3_MOE_FUSED_UNIFORM=1` is now the image default. Gates: the ones under T3
+above, plus decode through the API with the fix off / on
+(`tools/concurrent_decode.py`, 400 tokens, default sampling, 4 rounds):
+
+| | off | on |
+|---|---:|---:|
+| one session | 53.9 [50.0–56.6] tok/s | 54.2 [47.9–55.9] tok/s |
+| three at once, aggregate | 25.7 [24.0–26.3] tok/s | **54.9 [52.2–55.6] tok/s** |
+
+(With three sessions the verify batch exceeds the 8-row decode kernel and fell
+through to the per-expert loop, ~9 tok/s per session.)
+
+Through the API with the fix on: cold ~600-token prompt 1.27 s (server 1.07 s),
+~700 tokens 1.46 s; follow-up on 25k + 853 new 1.59 s; 115k cold prompts
+1,035–1,041 tok/s; follow-ups on 115k conversations 1.3–1.7 s server-side,
+all 99% cached; memory under load 79.1 GiB system-wide (72 GiB device + 4 GiB
+host for the server). Chunk 16384: 1,050–1,059 tok/s at 115k (+1.7%) for
++1.6 GiB (80.7 GiB system-wide); not adopted.
+
+Against the targets: follow-up ≤ 1.5 s — met at ~20k on the server side, 1.6 s at
+the client with 850 new tokens; cold 600 ≤ 1.5 s — met; three cached sessions —
+met; decode — not lower (and 2.1x with three sessions); long prompts ≥ 1,100
+tok/s — **not met**, ~1,040. What is left there is the fused kernel itself.

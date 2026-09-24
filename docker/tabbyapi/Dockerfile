@@ -94,9 +94,10 @@ RUN f=/app/backends/exllamav3/model.py \
 COPY patch_exllamav3_checkpoints.py /tmp/
 RUN python3 /tmp/patch_exllamav3_checkpoints.py && rm /tmp/patch_exllamav3_checkpoints.py
 
-# The fused multi-expert MoE kernel for prefill, which the fork switches off for
-# packs like this one (all experts share one K); see the script. Applied, but
-# off by default until it is approved: EXL3_MOE_FUSED_UNIFORM=1 turns it on.
+# The fused multi-expert MoE kernel, which the fork switches off for packs like
+# this one (all experts share one K); see the script. Short prompts prefill
+# ~2x faster and three concurrent sessions decode ~2x faster.
+# EXL3_MOE_FUSED_UNIFORM=0 turns it off again.
 COPY patch_exllamav3_fused_moe.py /tmp/
 RUN python3 /tmp/patch_exllamav3_fused_moe.py && rm /tmp/patch_exllamav3_fused_moe.py
 
@@ -117,7 +118,7 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_MTP_HEAD_N=65536 \
     EXL3_NGRAM_STREAM=1 \
     EXL3_DRAFT_CONFIDENCE=0.6 \
-    EXL3_MOE_FUSED_UNIFORM=0
+    EXL3_MOE_FUSED_UNIFORM=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \

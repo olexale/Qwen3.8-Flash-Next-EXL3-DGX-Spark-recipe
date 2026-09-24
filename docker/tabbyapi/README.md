@@ -120,45 +120,46 @@ passes them to the container.
 | `EXL3_INT8_GEMV` | `0` | int8 GEMV off (slower on GB10) |
 | `EXL3_MTP_HEAD_N` | `65536` | draft uses a 64K-column slice of the output head |
 | `EXL3_NGRAM_STREAM` | `1` | read the ~30 GiB n-gram table from NVMe as needed; `0` loads all of it into RAM (no faster, about 30 GiB more memory) |
-| `EXL3_MOE_FUSED_UNIFORM` | `0` | `1` turns on the fused MoE prefill kernel (`patch_exllamav3_fused_moe.py`): short prompts ~2x faster; see "What to expect" |
+| `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
 
 ## What to expect
 
-Measured 2026-09-24 through the API, one request at a time:
+Measured 2026-09-24 through the API:
 
 | | |
 |---|---|
-| Memory in use while serving | about 65 GB idle; about 81 GB with three ~115k-token conversations cached |
-| Prefill, cold prompt | about 840 tok/s (24k-token prompt: 29 s to first token) |
-| Follow-up turn, cached history + ~850 new tokens | about 3.5 s to first token |
+| Memory in use while serving | about 72 GiB of device memory plus 4 GiB host with three ~115k-token conversations cached; system total under 80 GiB |
+| Prefill, cold prompt | about 1,000–1,040 tok/s (24k-token prompt: 24 s; 115k: 111 s) |
+| Cold short prompt, ~600 tokens | about 1.3 s to first token |
+| Follow-up turn, cached history + ~850 new tokens | about 1.6 s on a 25k conversation, 1.7–2.1 s on 115k |
 | Conversations kept in the prefix cache | three at full length (262,144 tokens each) |
-| Decode, 400-token code answer, the model's default sampling | 45–59 tok/s (median ~53 over 6 runs), 59–70% of drafted tokens accepted |
-| First request after start | about 1.7 s; only the very first start after a new image pays ~20 s of kernel tuning |
+| Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–56), one session |
+| Decode, three sessions at once | about 55 tok/s together, ~18–20 each |
+| First request after start | under 2 s; only the very first start after a new image pays ~20 s of kernel tuning |
 
-What keeps it fast, so keep these when you edit: `chunk_size: 8192` in
-`config.yml` (TabbyAPI's default of 2048 prefills at about 460 tok/s),
-`patch_exllamav3_checkpoints.py` (recurrent-state checkpoints stay on the GPU
-instead of being copied to RAM), the `qwen38` sampler preset (without it
-TabbyAPI samples untruncated and fewer drafted tokens are accepted), and the
-`qwen38-tabby-cache` volume that `start_tabby.sh` mounts (kernel tuning
-results; without it every start re-tunes). The draft settings (5 tokens,
-confidence 0.6) were re-checked on sampled code, prose and tool-call output:
-no other combination was clearly faster.
+What keeps it fast, so keep these when you edit:
 
-**Short prompts** take about 3 s to the first token because the exllamav3 fork
-(`785f206`) switched off its fused MoE prefill kernel for packs like this one.
-`patch_exllamav3_fused_moe.py` switches it back on; it is in the image but
-**off** until the fix is signed off. To try it: `EXL3_MOE_FUSED_UNIFORM=1` in
-`.env`, then `./stop_tabby.sh && ./start_tabby.sh`. In the engine benchmark it
-takes a 600-token prompt from 2.8 to 1.2 s, a follow-up turn on a 20k
-conversation from 3.3 to 1.4 s, and long-prompt prefill from ~860 to ~1,050
-tok/s. Details and correctness checks: [OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md#results-2026-09-24).
+- `patch_exllamav3_fused_moe.py`: the exllamav3 fork (`785f206`) switched off
+  its fused MoE kernel for packs like this one, so every expert ran as its own
+  launch. The patch turns it back on (`EXL3_MOE_FUSED_UNIFORM=1`, the image
+  default): short prompts and follow-up turns ~2x faster, long prompts ~20%,
+  three concurrent sessions decode 2.1x faster (26 → 55 tok/s together).
+- `chunk_size: 8192` in `config.yml` (TabbyAPI's default of 2048 is much slower;
+  16384 is 1.7% faster still but needs 1.6 GiB more).
+- `patch_exllamav3_checkpoints.py` (recurrent-state checkpoints stay on the GPU
+  instead of being copied to RAM).
+- The `qwen38` sampler preset (without it TabbyAPI samples untruncated and fewer
+  drafted tokens are accepted).
+- The `qwen38-tabby-cache` volume that `start_tabby.sh` mounts (kernel tuning
+  results; without it every start re-tunes for ~20 s).
 
-Tried, no help: chunk 4096 or 16384 without the fused kernel,
-`EXL3_MOE_COOP_WIDE=0`, no vision tower, the n-gram table in RAM, other fused
-row limits.
+The draft settings (5 tokens, confidence 0.6) were re-checked on sampled code,
+prose and tool-call output: no other combination was clearly faster.
+Tried, no help: `EXL3_MOE_COOP_WIDE=0`, no vision tower, the n-gram table in
+RAM, other fused row limits, chunk 4096. Details:
+[OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md#results-2026-09-24).
 
 ## Access and safety
 
