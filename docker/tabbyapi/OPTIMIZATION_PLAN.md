@@ -290,3 +290,145 @@ negative results.
 After each task, update `docker/tabbyapi/README.md` "What to expect" with the
 new numbers and the date, and note what was tried and did not help. Keep raw
 logs in `logs/` on the Spark (gitignored).
+
+## Results (2026-09-24)
+
+Raw logs are in `logs/` on the Spark (`bench_*.log`).
+
+### T3: why short prefills are slow — answer (a), a condition keeps the fused path off
+
+**Cause.** The fork's commit `785f206` ("per-K-group fused MoE dispatch for
+mixed-K packs") moved the block that sets `support_fused` in
+`BlockSparseMLP.load_local()` into the branch for *mixed-K* packs. This pack
+is uniform (every expert 3-bit `mul1`), so `support_fused` stays False,
+`fused_mode_buffers` is never built, and prefill falls through to the
+per-expert loop. The earlier guesses were right that the conditions hold; the
+code just never evaluates them for a uniform pack.
+
+**Which path runs** (`tools/moe_trace.py`, one cold 600-token prefill, 48 MoE
+layers):
+
+| | shipped | patched |
+|---|---:|---:|
+| `support_fused` / fused buffers | False / none | True / 256 rows |
+| per-expert graph launches (`run_single_expert`) | 23,687 experts | 0 |
+| batched reconstruct | 2,036 experts in 371 groups | 5 experts |
+| fused `exl3_moe` launches | 0 | 265 (25,711 experts) |
+| `index_add_` / `index_select` / `mul_` in MoE scope | 25,103 / 29,363 / 25,103 | 0 / 12 / 0 |
+| MoE share of prefill (profiler, GPU) | 2.95 s of 5.99 s | 0.73 s of 2.28 s |
+
+Every one of the ~23k `index_add_` calls and ~52k GEMVs in the old profile was
+MoE. GatedDeltaNet, attention and the n-gram layer are small (<0.1 s each).
+
+**One MoE layer alone** (layer 24, real hidden states, `moe_trace.py`):
+
+| rows | experts touched | weight-read floor | per-expert path | fused path | parity (max rel) |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 53 | 0.4 ms | 4.0 ms | 1.4 ms | 5.5e-5 |
+| 64 | 148 | 1.2 ms | 11.6 ms | 3.6 ms | 5.6e-5 |
+| 600 | 316 | 2.5 ms | 31.5 ms | 9.6 ms | 9.0e-5 |
+| 2,048 | 445 | 3.6 ms | 53.1 ms | 19.9 ms | 9.3e-5 |
+
+**The fix** is `patch_exllamav3_fused_moe.py`: it moves the block back where
+upstream has it. `EXL3_MOE_FUSED_UNIFORM=0` restores the fork's behaviour. It
+is in the image, **off by default until the owner approves it** (T4).
+
+Engine benchmark (`run_engine_bench.sh`, chunk 8192, TTFT in s; "repeat" is a
+second prompt of the same size, i.e. without one-time tuning):
+
+| | cold 600 | 600 repeat | cold 3k | cold 12k | cold 20k | cold 40k | follow-up 20k + 600 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| J (shipped) | 3.92 | 2.77–2.96 | 6.19 | 16.7 | 24.8 | 46.5 (861 tok/s) | 3.30 |
+| J + fused patch | 2.38 | 1.18–1.23 | 4.02 | 12.3 | 19.9 | 38.4 (1,043 tok/s) | 1.35 |
+
+**Correctness gates** (T4's list, run now so the decision has them):
+
+- MoE layer parity on real hidden states: max relative difference ≤ 9.3e-5
+  (fp16 noise), table above.
+- Greedy 400 tokens, code / DevOps / prose (`tools/greedy_ab.py`): two runs
+  of the *unpatched* engine already diverge from each other at tokens 44 / 108
+  / 34 (dynamic drafting and batched verify are not bit-reproducible). Patched
+  vs unpatched diverges at 44 / 108 / 122, no earlier than that noise;
+  acceptance 74 / 63 / 60% vs 76 / 67 / 61% (the unpatched pair: 76 / 67 / 61%
+  vs 74 / 68 / 52%).
+- Needle at 128k (`ctxfill.py`, 8-bit KV): found, patched.
+- Decode: single-session decode (verify batch ≤ 8) goes through `run_bszN`
+  either way, so it is untouched. With three sessions decoding at once the
+  verify batch exceeds 8 and would move from the per-expert loop to the fused
+  kernel; not measured yet.
+
+### The one-time slowness after a start: kernel tuning that was thrown away
+
+The ~20 s first request and the extra ~1.2 s on the first prompt of a new size
+are exllamav3's GEMM autotuner (and Triton's) running. Both keep results on
+disk under `~/.cache`, which died with every container. `start_tabby.sh` now
+keeps it in the `qwen38-tabby-cache` volume. Second start: first request
+19.4 → 1.6 s, first 600-token prompt 2.4 → 1.2 s. No warm-up request.
+
+### T3 step 3: reconciling with the README's faster numbers
+
+- The README's fork numbers (~900 tok/s at 4k, ~1,150 at 128k, `ctxfill.py`)
+  are from 2026-09-17, on 523ecd3, before the regressing commit. The patched
+  329e051 matches 523ecd3 exactly when both run in the image: `ctxfill.py`
+  K=128 prefills at 922–926 tok/s patched and 915 tok/s on an image built from
+  523ecd3. The remaining gap to 1,150 is environmental (that host venv no
+  longer exists) and could not be reproduced.
+- `bench_native.py`'s 1,129 tok/s used a prompt of one sentence repeated,
+  which routes to few experts; not comparable with varied prompts.
+- One change at a time from the shipped config, fused path on, cold 20k / 40k
+  tok/s: chunk 8192 1,032 / 1,047; **chunk 16384 1,062 / 1,070**; chunk 4096
+  990 / 983; `EXL3_MOE_COOP_WIDE=0` 1,035 / 1,046; `VISION=0` 1,040 / 1,051;
+  fused rows 128 1,000 / 1,008; fused rows 512 1,037 / 1,033;
+  `EXL3_NGRAM_STREAM=0` no change (also at 128k). Batch size is not a lever
+  for prefill of one prompt. Stock 1.5.0 was not built: its aarch64 patch
+  tool (`vllm-exl3/tools/patch_exllamav3_aarch64.py`) is not on the Spark.
+
+**Size of what is left.** With the fused path, the MoE layer is still 3–5x its
+weight-read floor (600 rows: 9.6 ms vs 2.5 ms; 2,048 rows: 19.9 vs 3.6 ms), so
+48 layers spend ~0.46 s of the 1.14 s 600-token prefill in MoE. Reaching the
+≥1,100 tok/s long-prompt target needs work on the fused kernel itself
+(option (b): its tiles at ~12 rows per expert), not configuration.
+
+### T1: three full contexts
+
+`cache_size: 786432`, `sysmem_recurrent_cache: 8192` (one checkpoint is ~112
+MiB; a ~115k prompt leaves ~11, a 262k one ~15). `max_batch_size` stays at
+TabbyAPI's default of 4. `tools/three_sessions.py` through the API: three
+~115k-token conversations, then two interleaved rounds of follow-ups — all six
+follow-ups 99% cached, 3.7–4.6 s TTFT (one at 9.0 s while an image build ran
+beside it). Memory: the server holds 71.5 GiB of device allocations plus
+4.2 GiB of host memory (~81 GB) after the test; the system-wide low point of
+MemAvailable was 34 GiB of 122.
+
+### T2: speculative decoding for sampled output — no change
+
+`tools/draft_sweep.py`: `draft_num_tokens` 3–7 x `EXL3_DRAFT_CONFIDENCE`
+0.4–0.8, dynamic drafting, the qwen38 preset's sampling (temperature 1.0,
+top_k 20, top_p 0.95), 320 tokens, 10 samples per cell and prompt class.
+Decode tok/s, median [range], shipped cell (5, 0.6) first:
+
+| | code | prose | tool call (pi-style edit) |
+|---|---:|---:|---:|
+| **5 / 0.6 (shipped)** | 70.0 [62.9–73.8] | 47.5 [44.4–53.2] | 81.4 [79.2–85.5] |
+| 7 / 0.4 | 72.0 [64.8–76.9] | 46.1 [45.5–50.4] | 85.4 [83.1–87.2] |
+| 7 / 0.5 | 70.3 [63.5–75.5] | 46.3 [43.8–48.4] | 88.1 [73.1–92.2] |
+| 5 / 0.4 | 74.1 [56.1–78.9] | 47.4 [42.4–50.2] | 82.1 [78.2–85.0] |
+| 6 / 0.7 | 69.8 [65.3–72.8] | 46.5 [45.1–49.1] | 85.3 [76.2–88.2] |
+| 3 / 0.5 | 68.3 [62.4–71.6] | 46.9 [45.3–49.5] | 73.7 [64.9–76.8] |
+
+No cell is ≥ 5% faster with non-overlapping ranges on any class, and the ones
+that gain on tool calls lose on code or prose, so the setting stays. Prose is
+flat at 45–48 tok/s in every cell; tool calls gain most from longer drafts
+(acceptance ~85–90%), which is T5's case. Full table:
+`logs/bench_draft_sweep.log` on the Spark.
+
+### Status after this round
+
+| | Before | Deployed now | With the fused patch on (awaiting approval) | Target |
+|---|---:|---:|---:|---:|
+| Follow-up: cached history + ~600 new | 3.3–3.6 s | 3.5 s (API, 25k) | 1.35 s (engine, 20k) | ≤ 1.5 s |
+| Cold 600-token prompt | 3.9 s | ~2.8 s after the first of its size (tuning now cached) | 1.2 s (engine) | ≤ 1.5 s |
+| Cold prefill, long prompts | ~840 tok/s | ~840 tok/s | 1,047 tok/s at 40k (1,070 with chunk 16384) | ≥ 1,100 |
+| Full-context sessions cached | 1 | 3 | 3 | 3 |
+| Decode, 400-token code answer | ~56 tok/s | 45–59, median ~53 (6 samples, sampled output) | unchanged path | not lower |
+| First request after a start | ~8 s | 1.7 s | | |

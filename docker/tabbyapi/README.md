@@ -45,6 +45,7 @@ Settings from `.env`:
 | `TABBY_RESTART` | `unless-stopped` | Docker restart policy |
 | `TABBY_CPUSET` | `5-9,15-19` | the fast cores (about +2 tok/s) |
 | `TABBY_CONFIG` | none | a `config.yml` to use instead of the image's, no rebuild |
+| `TABBY_CACHE_VOLUME` | `qwen38-tabby-cache` | Docker volume for kernel tuning results; empty to not keep them |
 | `TABBY_IMAGE`, `TABBY_CONTAINER` | `qwen38-exl3-tabby:latest`, `qwen38-tabby` | |
 
 What the script and image take care of:
@@ -119,34 +120,45 @@ passes them to the container.
 | `EXL3_INT8_GEMV` | `0` | int8 GEMV off (slower on GB10) |
 | `EXL3_MTP_HEAD_N` | `65536` | draft uses a 64K-column slice of the output head |
 | `EXL3_NGRAM_STREAM` | `1` | read the ~30 GiB n-gram table from NVMe as needed; `0` loads all of it into RAM (no faster, about 30 GiB more memory) |
+| `EXL3_MOE_FUSED_UNIFORM` | `0` | `1` turns on the fused MoE prefill kernel (`patch_exllamav3_fused_moe.py`): short prompts ~2x faster; see "What to expect" |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
 
 ## What to expect
 
-Measured 2026-09-23 through the API, one request at a time:
+Measured 2026-09-24 through the API, one request at a time:
 
 | | |
 |---|---|
-| Memory in use while serving | about 65 GB (about 59 GiB of it the model and KV cache) |
+| Memory in use while serving | about 65 GB idle; about 81 GB with three ~115k-token conversations cached |
 | Prefill, cold prompt | about 840 tok/s (24k-token prompt: 29 s to first token) |
-| Follow-up turn, cached history + ~850 new tokens | about 3.6 s to first token |
-| Decode, 400-token code answer, the model's default sampling | about 56 tok/s, 66% of drafted tokens accepted |
-| First request after start | about 8 s extra (one-time kernel setup) |
+| Follow-up turn, cached history + ~850 new tokens | about 3.5 s to first token |
+| Conversations kept in the prefix cache | three at full length (262,144 tokens each) |
+| Decode, 400-token code answer, the model's default sampling | 45–59 tok/s (median ~53 over 6 runs), 59–70% of drafted tokens accepted |
+| First request after start | about 1.7 s; only the very first start after a new image pays ~20 s of kernel tuning |
 
-Three things in the image are there for speed, so keep them when you edit:
-`chunk_size: 8192` in `config.yml` (larger prefill chunks; TabbyAPI's default
-of 2048 prefills at about 460 tok/s), `patch_exllamav3_checkpoints.py` (keeps
-the recurrent-state checkpoints taken every 2,048 tokens on the GPU instead of
-copying them to RAM), and the `qwen38` sampler preset (the model's own
-sampling defaults for requests that set none; without it TabbyAPI samples
-untruncated and fewer drafted tokens are accepted).
+What keeps it fast, so keep these when you edit: `chunk_size: 8192` in
+`config.yml` (TabbyAPI's default of 2048 prefills at about 460 tok/s),
+`patch_exllamav3_checkpoints.py` (recurrent-state checkpoints stay on the GPU
+instead of being copied to RAM), the `qwen38` sampler preset (without it
+TabbyAPI samples untruncated and fewer drafted tokens are accepted), and the
+`qwen38-tabby-cache` volume that `start_tabby.sh` mounts (kernel tuning
+results; without it every start re-tunes). The draft settings (5 tokens,
+confidence 0.6) were re-checked on sampled code, prose and tool-call output:
+no other combination was clearly faster.
 
-Short prompts still take about 3 s to the first token. A profile of a
-600-token prefill shows the MoE layers issuing about 23,000 small per-expert
-operations. Why the fused MoE path is not taking them is not known yet: the
-pack's gate, up and down experts share one codebook (`mul1`, 3-bit), so the
-codebook check is not the reason. See [OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md).
+**Short prompts** take about 3 s to the first token because the exllamav3 fork
+(`785f206`) switched off its fused MoE prefill kernel for packs like this one.
+`patch_exllamav3_fused_moe.py` switches it back on; it is in the image but
+**off** until the fix is signed off. To try it: `EXL3_MOE_FUSED_UNIFORM=1` in
+`.env`, then `./stop_tabby.sh && ./start_tabby.sh`. In the engine benchmark it
+takes a 600-token prompt from 2.8 to 1.2 s, a follow-up turn on a 20k
+conversation from 3.3 to 1.4 s, and long-prompt prefill from ~860 to ~1,050
+tok/s. Details and correctness checks: [OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md#results-2026-09-24).
+
+Tried, no help: chunk 4096 or 16384 without the fused kernel,
+`EXL3_MOE_COOP_WIDE=0`, no vision tower, the n-gram table in RAM, other fused
+row limits.
 
 ## Access and safety
 
