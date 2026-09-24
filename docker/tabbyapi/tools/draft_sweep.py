@@ -98,9 +98,12 @@ config = Config.from_directory(MODEL)
 tok = Tokenizer.from_config(config)
 model = Model.from_config(config)
 dm = Model.from_config(config, component="mtp")
+qkw = dict(layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
+# Caches must exist before the load; one pair per draft length (max_history = ndt)
+caches = {ndt: (Cache(model, max_num_tokens=16384, max_batch_size=4, max_history=ndt, **qkw),
+                Cache(dm, max_num_tokens=16384, max_batch_size=4, max_history=ndt, **qkw)) for ndt in NDTS}
 dm.load(progressbar=False)
 model.load(progressbar=False, max_chunk_size=8192, max_batch_size=4)
-qkw = dict(layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
 ids = {k: tok.encode(v, add_bos=False) for k, v in PROMPTS.items()}
 
 def run(gen, w, seed):
@@ -118,8 +121,7 @@ def run(gen, w, seed):
 
 res = collections.defaultdict(list)
 for ndt in NDTS:
-    cache = Cache(model, max_num_tokens=16384, max_batch_size=4, max_history=ndt, **qkw)
-    dcache = Cache(dm, max_num_tokens=16384, max_batch_size=4, max_history=ndt, **qkw)
+    cache, dcache = caches[ndt]
     gen = Generator(model=model, cache=cache, tokenizer=tok, draft_model=dm, draft_cache=dcache,
                     max_batch_size=4, max_chunk_size=8192, num_draft_tokens=ndt,
                     dynamic_draft_tokens=True, draft_confidence=CONFS[0])
@@ -134,8 +136,7 @@ for ndt in NDTS:
                 tps, acc = run(gen, w, 1000 + rep)
                 res[(ndt, c, w)].append((tps, acc))
                 print(f"SAMPLE ndt={ndt} conf={c} {w:<5} rep={rep} {tps:6.1f} tok/s accept {acc:4.0f}%", flush=True)
-    del gen, cache, dcache
-    torch.cuda.empty_cache()
+    del gen
 
 def fmt(v):
     return f"{statistics.median(v):5.1f} [{min(v):5.1f}-{max(v):5.1f}]"
