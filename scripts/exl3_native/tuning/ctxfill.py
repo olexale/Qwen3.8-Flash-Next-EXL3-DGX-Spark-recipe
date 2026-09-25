@@ -75,14 +75,18 @@ ckw = {}
 if CQ:
     b = [int(x) for x in CQ.split(",")]; kb, vb = (b[0], b[0]) if len(b) == 1 else b
     ckw = dict(layer_type=CacheLayer_quant, k_bits=kb, v_bits=vb)
-cache = Cache(model, max_num_tokens=CS, max_history=NDT + 1, **ckw)
-dcache = Cache(dm, max_num_tokens=CS, **ckw)
+# MBS: batch slots (the engine's default is 16; TabbyAPI here runs 3). Each slot holds the
+# GatedDeltaNet rollback history, ~113 MB per draft token (more with EXL3_PLD=1)
+MBS = int(os.environ.get("MBS", "16"))
+cache = Cache(model, max_num_tokens=CS, max_history=NDT + 1, max_batch_size=MBS, **ckw)
+dcache = Cache(dm, max_num_tokens=CS, max_batch_size=MBS, **ckw)
 t0 = time.time()
 dm.load(progressbar=False); model.load(progressbar=False)
 print(f"loaded in {time.time()-t0:.0f}s, host used {peak['used']/1024:.1f} GiB", flush=True)
 
 gen = Generator(model=model, cache=cache, tokenizer=tok, draft_model=dm, draft_cache=dcache,
-                num_draft_tokens=NDT, dynamic_draft_tokens=True, draft_confidence=0.6, max_chunk_size=4096)
+                num_draft_tokens=NDT, dynamic_draft_tokens=True, draft_confidence=0.6, max_chunk_size=4096,
+                max_batch_size=MBS)
 job = Job(input_ids=ids, max_new_tokens=NEW, sampler=GreedySampler(), stop_conditions=[] if TASK != 'needle' else [tok.eos_token_id])
 gen.enqueue(job)
 out, t_start, t_first = "", time.time(), None
