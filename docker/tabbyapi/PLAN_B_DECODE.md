@@ -308,3 +308,54 @@ What that says, for B2:
   rollback history) in 68 µs, at bandwidth; the mixers are a closed lever (README).
 - No single item above is worth more than ~2% on code. The round is
   weight-streaming bound, so tokens per round is the lever: B3.
+
+### B3: prompt-lookup drafting alongside MTP, synthetic workload
+
+`patch_exllamav3_pld.py` (`EXL3_PLD=1`): per round, for a single active job, look up
+the last 3 tokens of the sequence in an n-gram index of prompt + output (built once per
+job, extended per round; last 4 end positions per n-gram); if the best match extends to
+≥ `EXL3_PLD_MIN_MATCH` tokens, draft the ≤ `EXL3_PLD_MAX` tokens that followed it and skip
+the MTP chain that round. The post-verify MTP prefill then also covers the round's first
+position (no draft step wrote it). Verification is unchanged, so outputs are unchanged by
+construction.
+
+**Two harness fixes found on the way.** `draft_sweep.py`, `greedy_ab.py` and
+`decode_profile.py` encoded prompts without `encode_special_tokens`, so the chat markup
+reached the model as plain text (T2 and B1 above ran on such prompts; relative results
+stand). And the old `tool` workload uses Qwen2.5-style JSON tool calls, where `oldText` is
+a JSON string with escaped newlines and quotes, so it is not a verbatim copy of the file.
+This model's template writes tool calls as `<function=edit><parameter=oldText>` blocks
+with raw multi-line values. The new `edit` and `rewrite` workloads (a real ~110-line file
+from the image in context, two `edit` calls / the whole file back through `write`) are
+rendered with the model's own `chat_template.jinja`, thinking off.
+
+**Verify cost by rows** (round wall time, from `ROUNDSTAT=1`): MTP rounds 37 ms at 2
+rows → 60–64 ms at 6 (incl. ~1.2 ms per draft step); lookup rounds 59 ms at 6 rows,
+66.5 ms at 8, **126 ms at 11, 144–149 ms at 16**. Above 8 rows the MoE leaves the fused
+decode kernels (`MAX_BSZN = 8`) for the prefill-style fused kernel, which costs ~45 ms
+more per round. So lookup drafts of 15 tokens lose (first try, cap 15 / min match 6:
+edit 83 vs 91 tok/s, JSON tool calls 60 vs 78), and the cap has to be 7.
+
+**Offline simulation** (dumped sequences of MTP-only runs as ground truth, lookup
+acceptance = common prefix with the real continuation, measured round costs): cap 7 /
+min match 8: edit x1.21, rewrite x1.27, code x1.00, JSON tool calls x1.04. With the
+8-row limit lifted (cap 15 at the 8-row path's ~4.6 ms per row): edit x1.32–1.36,
+rewrite x1.50.
+
+**Engine A/B, cap 7 / min match 8** (`draft_sweep.py PLDS=0,1`, draft 5 / 0.6, preset
+sampling, 10 samples per cell, in-process toggle; `logs/bench_pld_ab3.log`):
+
+| tok/s, median [range] | MTP only | MTP + lookup | |
+|---|---:|---:|---:|
+| edit (2 `edit` calls, 243 tokens) | 91.3 [89.8–91.5] | **106.3 [106.2–106.4]** | +16% |
+| rewrite (whole file, ~818 tokens) | 87.3 [86.9–88.1] | **107.3 [106.5–108.6]** | +23% |
+| code | 70.9 [67.4–72.9] | 71.2 [67.6–74.1] | ±0 |
+| prose | 46.9 [44.4–48.5] | 46.6 [43.1–51.2] | −0.6% |
+| JSON tool call (old `tool`) | 76.4 [69.5–88.3] | 76.5 [56.4–91.0] | ±0 |
+
+Lookup rounds: 7 drafts, 66.5 ms, 6.1 (edit) / 6.6 (rewrite) accepted, against MTP's
+~64 ms for ≤ 5.9 tokens. Rollback history at cap 7: +2 x ~113 MB per batch slot
+(+0.9 GiB at `max_batch_size` 4), only with `EXL3_PLD=1`.
+
+Next: lift the 8-row limit (`patch_exllamav3_bszn16.py`, `EXL3_MOE_BSZN_MAX=16`) and
+retune the cap; the recorded pi session for the keep/remove decision (asked).
