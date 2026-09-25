@@ -598,3 +598,30 @@ on a 90-token prompt and 0.27–0.31 s on 115k follow-ups. Where it goes:
   saves at 115k is within run-to-run noise of the follow-up TTFT (client mean
   1.68 s over six follow-ups vs 1.76 s before; server 1.14–1.63 s). Memory 78.1
   GiB system-wide. Rollback: `:pre-enccache`.
+
+### Decode (Track B, 2026-09-25): prompt lookup alongside MTP, 16-row decode MoE
+
+Plan and all numbers: [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25). Summary:
+
+- **Where a round goes** (B1, `tools/decode_profile.py`): 53 ms per round on code, 43 ms of
+  it the verify forward (MoE 19, GatedDeltaNet 10, mixers 7, attention 3.5, lm_head 1.7),
+  MTP chain 4, GPU idle 4.7 ms (8.8%), mostly ~2 µs gaps between the verify's ~1,140
+  kernels. Host bubbles from the dynamic-draft syncs: ~0.4 ms. No B2 item is worth more
+  than ~2%; tokens per round is the lever.
+- **T5 done as `patch_exllamav3_pld.py`** (`EXL3_PLD`, off): lookup drafts inside the MTP
+  loop, gated by the MTP head's first token, adaptive length 7 → cap. Plus
+  `patch_exllamav3_bszn16.py` (`EXL3_MOE_BSZN_MAX`, 8): verifies of up to 16 rows on the
+  fused decode MoE kernels (147 → 103 ms at 16 rows). Through the API with both on: pi-style
+  edit turns 82 → 101 tok/s, whole-file rewrites 85 → 140, one session unchanged, two
+  sessions 55 → 64, three 54 → 63; memory 78.6 → 84.1 GiB at cap 15 (the GatedDeltaNet
+  rollback history), so cap 11 with `max_batch_size: 3` or cap 7 is the fit for ~80 GiB.
+  Both off until the owner approves; the keep/remove decision waits for a recorded pi
+  session.
+- **Harness fixes:** `draft_sweep.py`, `greedy_ab.py` encoded prompts without special
+  tokens (chat markup as plain text; the T2 table above ran that way, its relative result
+  stands). With the fix, greedy decode is bit-reproducible run to run. The old `tool`
+  workload's JSON tool calls do not quote files verbatim; this model's template uses
+  `<parameter=...>` blocks with raw values (new `edit` / `rewrite` workloads).
+- Tried, no help: lookup drafts of 15 on the 8-row path (the prefill-kernel verify costs
+  ~45 ms more per round; edit 83 vs 91 tok/s), ungated lookups (repeated code fragments:
+  −4% on greedy_ab's code prompt), minimum match 5 instead of 8 (no gain).

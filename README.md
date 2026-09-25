@@ -752,10 +752,16 @@ days twice.
 - **CUDA-graph capture of the decode round.** Already done inside the engine —
   see the paragraph above the negative-results list. Not a lever.
 
-- **N-gram assist alongside MTP.** Mutually exclusive: `Generator` asserts
-  `not ngram_match_min` when a draft model is set, so n-gram drafting replaces
-  the MTP head rather than assisting it. On novel code, a 75%-acceptance MTP
-  head is the better drafter.
+- **N-gram assist alongside MTP.** Mutually exclusive in the fork: `Generator`
+  asserts `not ngram_match_min` when a draft model is set, so its n-gram
+  drafting replaces the MTP head rather than assisting it. On novel code, a
+  75%-acceptance MTP head is the better drafter. *Reopened 2026-09-25 for the
+  TabbyAPI image:* prompt lookup that runs *inside* the MTP loop (the lookup
+  draft replaces the rest of the chain only when a long match exists and the MTP
+  head's first token agrees) speeds up edit tool calls and file rewrites by
+  30–40% with code and prose unchanged; see
+  [docker/tabbyapi/PLAN_B_DECODE.md](docker/tabbyapi/PLAN_B_DECODE.md#findings-2026-09-25)
+  (`EXL3_PLD`, off by default).
 
 - **A dequant-once MoE kernel — premise withdrawn, size unmeasured.** The fused
   expert kernel costs ~linearly in verify rows (0.127 ms at m=1 to 0.704 ms at

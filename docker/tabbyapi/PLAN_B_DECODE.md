@@ -357,5 +357,102 @@ Lookup rounds: 7 drafts, 66.5 ms, 6.1 (edit) / 6.6 (rewrite) accepted, against M
 ~64 ms for ≤ 5.9 tokens. Rollback history at cap 7: +2 x ~113 MB per batch slot
 (+0.9 GiB at `max_batch_size` 4), only with `EXL3_PLD=1`.
 
-Next: lift the 8-row limit (`patch_exllamav3_bszn16.py`, `EXL3_MOE_BSZN_MAX=16`) and
-retune the cap; the recorded pi session for the keep/remove decision (asked).
+### B3 continued: the 16-row decode MoE, adaptive length, the MTP gate
+
+**16-row fused decode MoE** (`patch_exllamav3_bszn16.py`): the extension is built with
+`MAX_BSZN 16` and the Python-side limit is a run-time setting, `EXL3_MOE_BSZN_MAX`
+(default 8). The coop kernels already bound their slots at 256 and size their counters
+from the Python buffers; split-k is off, so the launch geometry does not depend on the
+scratch size. Verify rounds with 16 rows: 147 → 103 ms, 12 rows: 126 → 83 ms (the 8-row
+path's ~4.6 ms per row continues). Parity (`tools/logit_dump.py`, separate processes):
+with the limit at 16, the prompt prefill, 64 one-row decode steps and a 64-token MTP run
+give bit-identical logits to the limit at 8; `greedy_ab.py` (`AGENT=1`) with the image at
+8 vs the old image: identical 400 tokens on all five prompts. With the limit at 16, one
+greedy_ab sequence diverged at token 50 (DevOps) after four other prompts in the
+process, acceptance within 1.3 points; likely a different draft window → different verify
+batch shape (the run-to-run effect noted under "What is known"), not pinned down.
+
+**Adaptive length** (`EXL3_PLD_START=7`, `EXL3_PLD_MAX`): draft 7 lookup tokens, and up to
+the cap right after a lookup round whose drafts were all accepted (a copy in progress).
+Offline simulation: 7→15 edit x1.35, rewrite x1.49, code x1.00 (fixed 15: code x0.99).
+
+**MTP-agreement gate** (`EXL3_PLD_GATE=1`, default): on a match, run MTP draft step 0 as
+usual and switch to the lookup draft only if its first token equals the MTP head's (on the
+host already in the dynamic-drafting path; one small readback otherwise). A disagreement
+just continues the MTP chain, so a wrong lookup costs nothing. Greedy, engine, in process
+(`logs/bench_gs_gate.log`, tok/s):
+
+| | MTP only | lookup, ungated | **lookup, gated** | gated, min match 5 |
+|---|---:|---:|---:|---:|
+| code | 69.5 | 69.7 | 70.1 | 70.1 |
+| code2 (greedy_ab's code prompt, repeats its code) | 74.9 | 73.6 | 74.3 | 73.7 |
+| devops | 54.5 | 54.8 | 55.6 | 55.7 |
+| prose | 49.3 | 50.7 | 49.4 | 50.0 |
+| edit | 91.5 | 115.1 | **117.2** | 117.0 |
+| rewrite | 87.2 | 115.7 | **124.0** | 123.2 |
+
+Without the gate, `greedy_ab.py`'s code prompt was 4% slower (lookups on repeated code
+fragments that the model does not continue verbatim).
+
+**Cap** (greedy, gated, 16-row path, `logs/bench_gs_caps.log`):
+
+| tok/s | MTP only | cap 7 | cap 9 | cap 11 | cap 15 |
+|---|---:|---:|---:|---:|---:|
+| edit | 91.6 | 106.4 | 108.6 | **119.2** | 117.5 |
+| rewrite | 87.1 | 105.3 | 111.4 | 118.7 | **123.2** |
+| code2 | 73.6 | 75.0 | 74.7 | 76.3 | 74.8 |
+| rollback history, extra memory (batch 4 / batch 3) | | +0.9 / — | +1.8 / +1.0 | +2.7 / +1.4 | +4.5 / +2.7 GiB |
+
+**Sampled, 10 samples per cell** (adaptive 7→15 ungated, 16-row path; `logs/bench_b16_ab.log`):
+edit 90.9 → 120.1, rewrite 86.8 → 124.3, code 71.7 → 69.2 (ranges overlap: [66.3–77.4] vs
+[66.7–73.7]), prose 47.2 → 47.8, JSON tool call 76.7 → 73.4 (overlap).
+
+**Through the API** (image `qwen38-exl3-tabby:pldgate`, `EXL3_PLD=1 EXL3_MOE_BSZN_MAX=16`,
+cap 15, gated; `tools/api_edit.py`, pi-style `edit` / `write` turns rendered by TabbyAPI,
+TabbyAPI's own decode rate, 5 reps):
+
+| | features off (deployed) | on |
+|---|---:|---:|
+| edit turn (2 `edit` calls, 286 tokens) | 82.3 [80.5–83.7] | **100.8** [96.7–102.8] |
+| rewrite turn (whole file, 800 tokens) | 85.2 [84.6–85.8] | **140.1** [130.2–140.3] |
+| one session, `concurrent_decode.py` (10 rounds) | 54.5 [51.1–56.9] | 53.1 [47.6–58.9] |
+| two sessions, aggregate | 55.0 [53.5–57.8] | **64.0** [63.0–71.0] |
+| three sessions, aggregate | 53.7 [51.9–54.7] | **63.2** [61.7–64.6] |
+| memory, `three_sessions.py` (~117k each) | 78.6 GiB | **84.1 GiB** |
+
+Two and three sessions gain from the 16-row path alone (verifies of 9–16 rows no longer
+take the prefill kernel); it costs no memory. The memory is the rollback history at cap 15:
+(16 − 6) x ~113 MB x 4 batch slots.
+
+### Status (2026-09-25) and what needs the owner
+
+Deployed: image `qwen38-exl3-tabby:pldgate` as `:latest` (rollback `:pre-pld`), both new
+features **off**: greedy output bit-identical to the previous image, decode 54.5 tok/s one
+session, 53.7 three, memory 78.6 GiB.
+
+| | Before | With `EXL3_PLD=1 EXL3_MOE_BSZN_MAX=16` (API) | Target |
+|---|---:|---:|---:|
+| Decode, 400-token answer, one session | 54.0 | 53.1–54.5 (unchanged within noise) | ≥ 60 — not met |
+| pi-style edit tool calls | 82 (API) / 81–91 (engine) | 101 (API) / 117–120 (engine) | ≥ 100 — met |
+| Whole-file rewrite | 85 (API) | 140 (API) | |
+| Prose | 47 (engine) | 47–48 | not lower — met |
+| Three sessions | 53.9 | 63.2 | not lower — met |
+| Prefill, TTFT | | unchanged (decode-only changes; follow-ups 1.4–1.8 s at 117k) | not lower |
+
+Decisions for the owner:
+
+1. **Turn on `EXL3_PLD=1` and `EXL3_MOE_BSZN_MAX=16`?** Lookup drafting is lossless by
+   construction (only drafts equal to the target's own sample are kept). The 16-row path is
+   bit-identical at ≤ 8 rows; batches of 9–16 rows (long lookup drafts, 2–3 sessions) now
+   run the decode kernels instead of the prefill kernel, a different summation.
+2. **Memory for the rollback history.** Cap 15 at `max_batch_size` 4 is 84 GiB. Within
+   ~80: cap 11 with `max_batch_size: 3` (+1.4 GiB, ~80 GiB; three sessions still fit), or
+   cap 7 at batch 4 (+0.9 GiB; edits +16% instead of +30%). A way around it (recompute the
+   GatedDeltaNet state on rollback instead of storing per-token history) is multi-day
+   engine work.
+3. **The keep/remove decision needs a recorded pi session** (asked at the start of B3):
+   `logging.log_prompt: true` for one normal session (restart), or an export from pi.
+
+B2 is closed: every item is below ~2% (B1). The remaining one-session code number is
+bounded by the verify cost per row (weight streaming) and MTP acceptance; nothing left in
+the list is sized above ~2%.

@@ -133,7 +133,7 @@ What each one is worth is in the main [README](../../README.md#the-native-engine
 
 ## What to expect
 
-Measured 2026-09-25 through the API:
+Measured 2026-09-25 through the API (image `:pldgate`, new features off):
 
 | | |
 |---|---|
@@ -145,6 +145,7 @@ Measured 2026-09-25 through the API:
 | Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–56), one session |
 | Decode, three sessions at once | about 54 tok/s together, ~18–20 each |
 | First request after start | under 2 s; only the very first start after a new image pays ~20 s of kernel tuning |
+| pi-style edit tool call / whole-file rewrite (`tools/api_edit.py`) | about 82 / 85 tok/s; 101 / 140 with `EXL3_PLD=1 EXL3_MOE_BSZN_MAX=16` (not yet on: see below) |
 
 What keeps it fast, so keep these when you edit:
 
@@ -169,6 +170,13 @@ What keeps it fast, so keep these when you edit:
   drafted tokens are accepted).
 - The `qwen38-tabby-cache` volume that `start_tabby.sh` mounts (kernel tuning
   results; without it every start re-tunes for ~20 s).
+
+Not on yet, awaiting approval: prompt-lookup drafting (`EXL3_PLD=1`) and the 16-row
+decode MoE (`EXL3_MOE_BSZN_MAX=16`). Together, edit tool calls +22% and file rewrites
++64% through the API, two or three sessions at once +16–18%, one session unchanged. At
+the default cap of 15 lookup tokens the extra rollback history takes 84 GiB in the
+three-session test (78.6 without); `EXL3_PLD_MAX=11` with `max_batch_size: 3`, or
+`EXL3_PLD_MAX=7`, stays near 80. Details: [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25).
 
 The draft settings (5 tokens, confidence 0.6) were re-checked on sampled code,
 prose and tool-call output: no other combination was clearly faster.
