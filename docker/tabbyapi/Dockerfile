@@ -135,6 +135,12 @@ RUN python3 /tmp/patch_exllamav3_gdn_nocopy.py && rm /tmp/patch_exllamav3_gdn_no
 COPY patch_exllamav3_pld.py /tmp/
 RUN python3 /tmp/patch_exllamav3_pld.py && rm /tmp/patch_exllamav3_pld.py
 
+# Prefix-reuse diagnostic: one log line per request on how much of the cached
+# prefix was resumed and why the rest was prefilled again (lengths only, no
+# text). Log-only; EXL3_PREFIX_DIAG=1 turns it on, off by default.
+COPY patch_exllamav3_prefix_diag.py /tmp/
+RUN python3 /tmp/patch_exllamav3_prefix_diag.py && rm /tmp/patch_exllamav3_prefix_diag.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
