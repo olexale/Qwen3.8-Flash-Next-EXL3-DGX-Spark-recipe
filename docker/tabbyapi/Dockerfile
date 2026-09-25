@@ -141,6 +141,13 @@ RUN python3 /tmp/patch_exllamav3_pld.py && rm /tmp/patch_exllamav3_pld.py
 COPY patch_exllamav3_prefix_diag.py /tmp/
 RUN python3 /tmp/patch_exllamav3_prefix_diag.py && rm /tmp/patch_exllamav3_prefix_diag.py
 
+# Recurrent checkpoints at every page boundary of the output, copied from the
+# speculative-decoding rollback history, so a follow-up turn resumes at the end
+# of the previous answer instead of prefilling it again. Same states the fork's
+# own checkpointing stores; EXL3_HIST_STASH=0 turns it off.
+COPY patch_exllamav3_hist_stash.py /tmp/
+RUN python3 /tmp/patch_exllamav3_hist_stash.py && rm /tmp/patch_exllamav3_hist_stash.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
@@ -164,7 +171,8 @@ ENV EXL3_INT8_GEMV=0 \
     TABBY_ENCODE_CACHE=1 \
     EXL3_PLD=1 \
     EXL3_PLD_MAX=11 \
-    EXL3_MOE_BSZN_MAX=16
+    EXL3_MOE_BSZN_MAX=16 \
+    EXL3_HIST_STASH=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
