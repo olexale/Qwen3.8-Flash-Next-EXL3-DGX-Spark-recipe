@@ -54,6 +54,7 @@ def apply_variant(v):
             if hasattr(G, "_PLD"): G._PLD = val not in ("0", 0)
         elif k == "PLD_MAX": G._PLD_MAX = int(val)
         elif k == "MIN_MATCH": G._PLD_MIN_MATCH = int(val)
+        elif k == "START": G._PLD_START = int(val)
         elif k == "BSZN": _bsm.MAX_BSZN = _mlpm.MAX_BSZN = int(val)
         else: raise ValueError(k)
 import exllamav3.generator.generator as G

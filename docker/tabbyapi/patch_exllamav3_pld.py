@@ -5,8 +5,9 @@ quote `oldText` verbatim, file rewrites copy most of a file), the continuation o
 match is a better draft than the MTP head's <= 5 tokens: it can be long and it costs no
 draft forwards. Per round, for a single active job: look up the last EXL3_PLD_NGRAM tokens
 of the sequence (prompt + output) in an n-gram index of the earlier sequence; if the match
-extends to at least EXL3_PLD_MIN_MATCH tokens, draft the up to EXL3_PLD_MAX tokens that
-followed it and skip the MTP chain for that round. Otherwise draft with MTP as before (the
+extends to at least EXL3_PLD_MIN_MATCH tokens, draft the tokens that followed it and skip
+the MTP chain for that round: EXL3_PLD_START of them, or up to EXL3_PLD_MAX right after a
+lookup round whose drafts were all accepted (a copy in progress). Otherwise draft with MTP as before (the
 device-resident chain, dynamic drafting and the calibrator are untouched).
 
 Verification is unchanged: the target samples every position and a drafted token is kept
@@ -22,10 +23,12 @@ O(1) per round plus a bounded backward extension of the match.
 The GatedDeltaNet layers keep per-token state history for rolling back rejected drafts,
 sized by the cache's max_history; with EXL3_PLD=1 a Cache built with max_history > 0 gets
 max(max_history, EXL3_PLD_MAX). That is (EXL3_PLD_MAX - 5) x ~113 MB more per batch slot
-on this model. Drafts are also capped at the cache's max_history and at 15 (the fused
-decode path handles up to 16 rows per sequence).
+on this model. Drafts are also capped at the cache's max_history, at 15, and at the fused
+decode MoE's row limit minus one (7 by default; 15 with patch_exllamav3_bszn16.py and
+EXL3_MOE_BSZN_MAX=16): verify rows beyond it take the prefill-style MoE kernel, ~45 ms
+more per round.
 
-Env: EXL3_PLD=0|1  EXL3_PLD_MAX=7  EXL3_PLD_MIN_MATCH=8  EXL3_PLD_NGRAM=3
+Env: EXL3_PLD=0|1  EXL3_PLD_START=7  EXL3_PLD_MAX=15  EXL3_PLD_MIN_MATCH=8  EXL3_PLD_NGRAM=3
      EXL3_PLD_BATCH=1 (largest number of active jobs for which lookup is tried)
 
 Usage: python3 patch_exllamav3_pld.py [exllamav3 package dir]
@@ -47,7 +50,8 @@ EDITS = {
 """, """_MTP_DEVICE_DRAFT = _os.environ.get("EXL3_MTP_DEVICE_DRAFT", "1") != "0"
 # Prompt-lookup drafting alongside MTP (patch_exllamav3_pld.py)
 _PLD = _os.environ.get("EXL3_PLD", "0") == "1"
-_PLD_MAX = int(_os.environ.get("EXL3_PLD_MAX", "7"))
+_PLD_MAX = int(_os.environ.get("EXL3_PLD_MAX", "15"))
+_PLD_START = int(_os.environ.get("EXL3_PLD_START", "7"))
 _PLD_MIN_MATCH = int(_os.environ.get("EXL3_PLD_MIN_MATCH", "8"))
 _PLD_NGRAM = int(_os.environ.get("EXL3_PLD_NGRAM", "3"))
 _PLD_BATCH = int(_os.environ.get("EXL3_PLD_BATCH", "1"))
@@ -120,15 +124,25 @@ def _pld_draft(job, max_len):
         must be rectangular; MTP drafts that round). Rows shorter than the longest lookup draft
         are padded with their own last token (padding is verified and rejected like any draft).
         \"\"\"
-        cap = min(_PLD_MAX, 15, getattr(self.cache, "max_history", 0), self.draft_ids_pinned.shape[1])
+        # Verify rows beyond the fused decode MoE's row limit take a much slower path
+        from ..modules import block_sparse_mlp as _bsm
+        cap = min(_PLD_MAX, 15, _bsm.MAX_BSZN - 1, getattr(self.cache, "max_history", 0),
+                  self.draft_ids_pinned.shape[1])
         drafts = []
+        jobs = []
         for job in self.active_jobs:
             if not job.is_prefill_done(): continue
             if len(job.sequences) != 1: return None
             budget = min(job.max_new_tokens, job.max_rq_tokens) - max(job.new_tokens, 0) - 1
-            d = _pld_draft(job, min(cap, budget)) if budget > 1 else None
+            # Adaptive length: EXL3_PLD_START tokens, the cap after a fully accepted lookup round
+            n = min(getattr(job, "_pld_len", _PLD_START), cap, budget)
+            d = _pld_draft(job, n) if n > 1 else None
             if d is None: return None
             drafts.append(d)
+            jobs.append(job)
+        for job, d in zip(jobs, drafts):
+            job._pld_drafted = len(d)
+            job._pld_cap = cap
         if not drafts: return None
         w = max(len(d) for d in drafts)
         for row, d in enumerate(drafts):
@@ -152,7 +166,11 @@ def _pld_draft(job, max_len):
         ("""                # Position K was drafted from the last target state already. Replace accepted
                 # speculative positions K+1..K+A-1 with the corresponding target-state inputs.
                 if accepted_length > 1:""",
-         """                # Lookup round: no draft step wrote position K into the MTP cache, so prefill
+         """                if pld_round:
+                    full = accepted_length - 1 >= getattr(job, "_pld_drafted", 1 << 30)
+                    job._pld_len = getattr(job, "_pld_cap", _PLD_MAX) if full else _PLD_START
+
+                # Lookup round: no draft step wrote position K into the MTP cache, so prefill
                 # K..K+A-1, pairing K with the carried target state
                 if pld_round and job.mtp_last_hidden is not None:
                     self.draft_model.prefill(
@@ -178,7 +196,7 @@ def _pld_draft(job, max_len):
 """, """        # Prompt-lookup drafting (patch_exllamav3_pld.py) verifies longer drafts
         import os as _os
         if max_history > 0 and _os.environ.get("EXL3_PLD", "0") == "1":
-            max_history = max(max_history, min(int(_os.environ.get("EXL3_PLD_MAX", "7")), 15))
+            max_history = max(max_history, min(int(_os.environ.get("EXL3_PLD_MAX", "15")), 15))
         self.max_history = max_history
 """),
     ],
