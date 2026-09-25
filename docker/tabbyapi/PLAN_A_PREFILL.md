@@ -32,6 +32,25 @@ reached it on this machine at this clock with the same pack. Anything below
 it means there is still a known-possible gain somewhere. The targets above are
 what to report against; they are **not** a reason to stop (see "When to stop").
 
+> **Correction (A0, 2026-09-25): the 2,900 tok/s figure is not a prefill
+> rate.** vLLM 0.29.0's `LoggingStatLogger` credits a request's whole prompt
+> in the 10 s window where its *first output token* arrives
+> (`IterationStats.update_from_output`, `is_prefilling` branch) and divides by
+> the window length. A 29k-token prompt that finishes prefilling inside one
+> window reads as ~2,900 tok/s however long it took. From the timelines:
+> in `…192446.log` the 29,039-token prompt credited at 19:20:38 was already
+> filling the KV cache at 19:20:08 (1.9 → 3.8%) and was not finished at
+> 19:20:28, so it took **≥ 20 s: at most ~1,450 tok/s**; the KV growth rate
+> and the 106 tokens decoded in the last window put it at ~33 s, **~880
+> tok/s**. In `…204815.log` (the 20:43:48 line) the prompt was already running
+> at 20:42:18 (QSA kernels JIT-compiled mid-request) and finished ~20:43:39,
+> so it was slower still (cold start, first-use compiles). vLLM also
+> scheduled only 2,048 tokens per step (`max_num_scheduled_tokens is set to
+> 2048`). **There is no measured reference above TabbyAPI's ~1,230 tok/s**;
+> the targets above are kept as the owner set them, but they are no longer
+> backed by a known-possible number, and "prefill reaches the vLLM
+> reference" is not a stop condition any more. See "Findings" below.
+
 ## Constraints (the owner's; do not bend them)
 
 - **Model behaviour must not change.** Prefer changes that are *bit-identical*
