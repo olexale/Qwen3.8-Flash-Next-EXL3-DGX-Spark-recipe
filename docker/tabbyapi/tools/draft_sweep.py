@@ -34,7 +34,7 @@ import os, time, statistics, collections
 import torch
 from exllamav3 import Config, Model, Cache, Tokenizer, Generator, Job
 from exllamav3.cache import CacheLayer_quant
-from exllamav3.generator.sampler import ComboSampler
+from exllamav3.generator.sampler import ComboSampler, GreedySampler
 from exllamav3.generator.draft_confidence import DraftConfidenceCalibrator
 
 MODEL = os.environ.get("MODEL", "/models/qwen3.8-flash-next")
@@ -176,6 +176,7 @@ ids = {k: tok.encode(v, add_bos=False, encode_special_tokens=True) for k, v in P
 
 IM_END = tok.single_id("<|im_end|>")
 DUMP = os.environ.get("DUMP", "")
+GREEDY = os.environ.get("GREEDY", "0") == "1"   # deterministic output: tok/s differences are pure cost
 ROUNDSTAT = os.environ.get("ROUNDSTAT", "0") == "1"
 roundstat = collections.defaultdict(list); last_draft = []
 def _track(kind, fn):
@@ -190,7 +191,7 @@ def run(gen, w, seed):
     torch.manual_seed(seed)
     job = Job(input_ids=ids[w], max_new_tokens=NTOK_LONG if w in LONG else NTOK,
               stop_conditions=[IM_END] if w in LONG else [],
-              sampler=ComboSampler(temperature=1.0, top_k=20, top_p=0.95))
+              sampler=GreedySampler() if GREEDY else ComboSampler(temperature=1.0, top_k=20, top_p=0.95))
     gen.enqueue(job); t0 = None
     while gen.num_remaining_jobs():
         ta = time.perf_counter(); acc0 = job.accepted_draft_tokens; last_draft.clear()
