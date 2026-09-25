@@ -55,6 +55,7 @@ def apply_variant(v):
         elif k == "PLD_MAX": G._PLD_MAX = int(val)
         elif k == "MIN_MATCH": G._PLD_MIN_MATCH = int(val)
         elif k == "START": G._PLD_START = int(val)
+        elif k == "GATE": G._PLD_GATE = val not in ("0", 0)
         elif k == "BSZN": _bsm.MAX_BSZN = _mlpm.MAX_BSZN = int(val)
         else: raise ValueError(k)
 import exllamav3.generator.generator as G
@@ -149,6 +150,9 @@ def _agent(task):
 
 PROMPTS = {
     "code": "<|im_start|>user\nWrite a Python function that parses an nginx access log line into a dict with fields ip, timestamp, method, path, status, bytes. Include a docstring, type hints, and a short usage example.<|im_end|>\n" + NOTHINK,
+    # greedy_ab.py's code and DevOps prompts (code2 repeats pieces of its own code in the answer)
+    "code2": "<|im_start|>user\nWrite a Python function that parses an nginx access log line into a dict with fields ip, timestamp, method, path, status, bytes. Include a docstring, type hints, and a short usage example. Then explain each regex group in one bullet each.<|im_end|>\n" + NOTHINK,
+    "devops": "<|im_start|>user\nExplain, for a DevOps engineer, how Kubernetes horizontal pod autoscaling decides when to scale, including the formula it uses and two common pitfalls. Then give a complete example HPA YAML.<|im_end|>\n" + NOTHINK,
     "prose": "<|im_start|>user\nWrite a vivid 350-word short story about a lighthouse keeper on a remote island in Alaska who discovers something unexpected washed ashore after a storm.<|im_end|>\n" + NOTHINK,
     "tool": "<|im_start|>system\nYou are a coding agent working in the user's repository.\n\n" + TOOLS + "<|im_end|>\n"
             "<|im_start|>user\nIn src/app/settings.py, make Settings.load also validate that workers is at least 1 and log_level is one of DEBUG, INFO, WARNING, ERROR, and make merge() validate the merged result the same way. Use the edit tool.<|im_end|>\n"
