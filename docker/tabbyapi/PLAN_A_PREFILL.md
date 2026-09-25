@@ -27,6 +27,11 @@ rate: 0.0%" (a 10 s logging window). Its decode was slower (26–28 tok/s),
 which is why the owner moved to TabbyAPI. So vLLM is the reference for
 prefill only.
 
+**The ceiling is ~2,900 tok/s, and it is not a hardware limit:** vLLM 0.29.0
+reached it on this machine at this clock with the same pack. Anything below
+it means there is still a known-possible gain somewhere. The targets above are
+what to report against; they are **not** a reason to stop (see "When to stop").
+
 ## Constraints (the owner's; do not bend them)
 
 - **Model behaviour must not change.** Prefer changes that are *bit-identical*
@@ -66,11 +71,23 @@ prefill only.
 
 ## When to stop and ask the owner
 
-- Before shipping anything that is not bit-identical (show the gates' numbers).
-- Before starting a multi-day kernel rewrite (e.g. a new MoE prefill kernel).
-- Before any vLLM run.
-- When the targets are met, or when the remaining ideas are exhausted: report
-  with numbers and what was tried.
+**Meeting the target is not a reason to stop.** Keep working through the task
+list (and ideas found on the way) while any candidate still has measured
+promise. Stop only when one of these holds, then report with numbers and what
+was tried:
+
+- the remaining ideas are exhausted, or each remaining one is measured (or
+  sized from a profile) at less than ~2% end to end;
+- the next step needs the owner's approval (below);
+- prefill reaches the ~2,900 tok/s vLLM reference.
+
+Ask the owner (and keep working on other items meanwhile, if any):
+
+- before shipping anything that is not bit-identical (show the gates' numbers);
+- before starting a multi-day kernel rewrite (e.g. a new MoE prefill kernel);
+- before any vLLM run.
+
+Never bend a constraint to reach a number.
 
 ## Setup
 

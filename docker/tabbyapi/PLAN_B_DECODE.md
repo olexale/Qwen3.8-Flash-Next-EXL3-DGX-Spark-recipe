@@ -23,7 +23,9 @@ change.
 
 Honest expectation: decode here is limited by weight-decoding cost per
 verify round, and the drafter's acceptance; ~60–65 tok/s on general code is
-realistic, much more only on verbatim-copy output (tool calls).
+realistic, much more only on verbatim-copy output (tool calls). The targets
+are what to report against; they are **not** a reason to stop (see "When to
+stop").
 
 ## Constraints (the owner's; do not bend them)
 
@@ -55,11 +57,23 @@ realistic, much more only on verbatim-copy output (tool calls).
 
 ## When to stop and ask the owner
 
-- At the start of B3, for a recorded pi session (see B3); keep working on the
-  synthetic workload meanwhile.
-- Before shipping anything not bit-identical / not lossless by construction.
-- Before a multi-day kernel rewrite.
-- When targets are met or ideas are exhausted: report with numbers.
+**Meeting the targets is not a reason to stop.** Keep working through the task
+list (and ideas found on the way, e.g. from the B1 profile) while any
+candidate still has measured promise. Stop only when one of these holds, then
+report with numbers and what was tried:
+
+- the remaining ideas are exhausted, or each remaining one is measured (or
+  sized from the B1 profile) at less than ~2% on its workload;
+- the next step needs the owner's approval or data (below).
+
+Ask the owner (and keep working on other items meanwhile, if any):
+
+- at the start of B3, for a recorded pi session (see B3); keep working on the
+  synthetic workload meanwhile;
+- before shipping anything not bit-identical / not lossless by construction;
+- before a multi-day kernel rewrite.
+
+Never bend a constraint to reach a number.
 
 ## Setup
 
