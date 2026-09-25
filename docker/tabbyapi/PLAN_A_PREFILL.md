@@ -421,7 +421,7 @@ selected tokens), so its share is the same at 8k and 32k.
 
 | | Before (2026-09-24) | Now | Target |
 |---|---:|---:|---:|
-| Cold long prompt, 115k, API | 1,228–1,233 tok/s | 1,318–1,331 tok/s | ≥ 1,800 |
+| Cold long prompt, 115k, API | 1,228–1,233 tok/s | 1,302–1,331 tok/s | ≥ 1,800 |
 | Cold 20k, engine bench, chunk 8192 | 1,184 tok/s (16.9 s) | 1,281 tok/s (15.6 s) | ≥ 1,700 |
 | Cold ~600 tokens, API | 1.11 s | 1.12 s | ≤ 0.9 s |
 | Follow-up, 25k + ~850 new, API | 1.52 s | 1.46–1.51 s | ≤ 1.2 s |
@@ -436,6 +436,12 @@ mixer GEMM padding, chunk 16384 (memory is at 78–79.5 GiB of the ~80 budget).
 Left: the MoE (≥ 42% of prefill, running at ~13 TFLOPS in the fused tier against
 ~58 TFLOPS for cuBLAS here) needs a new kernel (A3h), and the HC apply + next-norm
 fusion across blocks (~1–2%, CUDA). Both wait for the owner.
+
+Short prompts are the same story: a cold 640-token prefill (1.11 s,
+`bench_a2_mod640.log`) spends 0.72 s (64%) in the MoE, 0.42 s of it in the
+16-row `exl3_moe` tile (~12 rows per expert); dense projections 0.17 s, block
+glue 0.08, GatedDeltaNet 0.06, attention 0.02. The ≤ 0.9 s and ≤ 1.2 s targets
+need the MoE ~30% faster.
 
 ## Gates for every change
 
