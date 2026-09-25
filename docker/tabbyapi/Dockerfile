@@ -56,16 +56,19 @@ RUN pip install --upgrade pip setuptools wheel ninja \
 
 # ---------------------------------------------------------------------------
 # 2. exllamav3 fork, extension precompiled. The fork already carries the
-#    aarch64 guards. One source patch before the build: a fused kernel for the
+#    aarch64 guards. Two source patches before the build: a fused kernel for the
 #    hyper-connection stream collapse in prefill (patch_exllamav3_gr_collapse.py,
 #    bit-identical to the torch code it replaces; EXL3_GR_COLLAPSE=0 turns it
-#    off). --no-build-isolation so setup.py sees the torch above; without it the
+#    off), and room for 16-row batches in the fused decode MoE kernels
+#    (patch_exllamav3_bszn16.py; the limit stays 8 unless EXL3_MOE_BSZN_MAX=16,
+#    bit-identical at 8). --no-build-isolation so setup.py sees the torch above; without it the
 #    extension is silently skipped.
 # ---------------------------------------------------------------------------
-COPY patch_exllamav3_gr_collapse.py /tmp/
+COPY patch_exllamav3_gr_collapse.py patch_exllamav3_bszn16.py /tmp/
 RUN git clone "${EXLLAMAV3_REPO}" /opt/src/exllamav3 \
  && git -C /opt/src/exllamav3 checkout --quiet "${EXLLAMAV3_REF}" \
  && python3 /tmp/patch_exllamav3_gr_collapse.py /opt/src/exllamav3 \
+ && python3 /tmp/patch_exllamav3_bszn16.py /opt/src/exllamav3 \
  && cd /opt/src/exllamav3 \
  && TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" MAX_JOBS="${MAX_JOBS}" \
         pip install --no-build-isolation . \
@@ -152,7 +155,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_QSA_STAGE=1 \
     EXL3_GDN_NOCOPY=1 \
     TABBY_ENCODE_CACHE=1 \
-    EXL3_PLD=0
+    EXL3_PLD=0 \
+    EXL3_MOE_BSZN_MAX=8
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
