@@ -25,7 +25,7 @@ max(max_history, EXL3_PLD_MAX). That is (EXL3_PLD_MAX - 5) x ~113 MB more per ba
 on this model. Drafts are also capped at the cache's max_history and at 15 (the fused
 decode path handles up to 16 rows per sequence).
 
-Env: EXL3_PLD=0|1  EXL3_PLD_MAX=12  EXL3_PLD_MIN_MATCH=6  EXL3_PLD_NGRAM=3
+Env: EXL3_PLD=0|1  EXL3_PLD_MAX=7  EXL3_PLD_MIN_MATCH=8  EXL3_PLD_NGRAM=3
      EXL3_PLD_BATCH=1 (largest number of active jobs for which lookup is tried)
 
 Usage: python3 patch_exllamav3_pld.py [exllamav3 package dir]
@@ -47,8 +47,8 @@ EDITS = {
 """, """_MTP_DEVICE_DRAFT = _os.environ.get("EXL3_MTP_DEVICE_DRAFT", "1") != "0"
 # Prompt-lookup drafting alongside MTP (patch_exllamav3_pld.py)
 _PLD = _os.environ.get("EXL3_PLD", "0") == "1"
-_PLD_MAX = int(_os.environ.get("EXL3_PLD_MAX", "12"))
-_PLD_MIN_MATCH = int(_os.environ.get("EXL3_PLD_MIN_MATCH", "6"))
+_PLD_MAX = int(_os.environ.get("EXL3_PLD_MAX", "7"))
+_PLD_MIN_MATCH = int(_os.environ.get("EXL3_PLD_MIN_MATCH", "8"))
 _PLD_NGRAM = int(_os.environ.get("EXL3_PLD_NGRAM", "3"))
 _PLD_BATCH = int(_os.environ.get("EXL3_PLD_BATCH", "1"))
 _PLD_KEEP = 4          # end positions kept per n-gram (most recent)
@@ -178,7 +178,7 @@ def _pld_draft(job, max_len):
 """, """        # Prompt-lookup drafting (patch_exllamav3_pld.py) verifies longer drafts
         import os as _os
         if max_history > 0 and _os.environ.get("EXL3_PLD", "0") == "1":
-            max_history = max(max_history, min(int(_os.environ.get("EXL3_PLD_MAX", "12")), 15))
+            max_history = max(max_history, min(int(_os.environ.get("EXL3_PLD_MAX", "7")), 15))
         self.max_history = max_history
 """),
     ],
