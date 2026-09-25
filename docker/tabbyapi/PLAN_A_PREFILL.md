@@ -186,10 +186,24 @@ does **not** split at every 2,048-token checkpoint (checked).
 
 ### vLLM's approach (read from the image, not run)
 
-- Image `qwen38-flash-next-exl3-vllm:latest`. The EXL3 plugin (`vllm_exl3`
-  0.4.2) is at `/opt/venv/lib/python3.12/site-packages/vllm_exl3/exl3.py`:
-  `apply_exl3_fused_moe` uses exllamav3's own `exl3_moe` (from **stock
-  exllamav3 1.5.0**, not the fork) for experts with ≤ 128 rows
+- Image `qwen38-flash-next-exl3-vllm:latest`, built by `docker/Dockerfile`
+  in this repo: vLLM **0.29.0** from PyPI (aarch64 wheel), exllamav3
+  **v1.4.7** (turboderp upstream, *not* the fork), vllm-exl3 `94c29ba`, plus
+  the Qwen4Exp patches to vLLM. **The image holds the exact sources**; copy
+  them out once at the start of A1 (no model load, nothing runs):
+  ```bash
+  mkdir -p ~/scratch/vllm_ref && CID=$(docker create qwen38-flash-next-exl3-vllm:latest)
+  docker cp $CID:/opt/src/exllamav3 ~/scratch/vllm_ref/exllamav3-1.4.7      # C++/CUDA + Python, aarch64-patched
+  docker cp $CID:/opt/src/vllm-exl3 ~/scratch/vllm_ref/vllm-exl3            # plugin incl. vllm_exl3_c CUDA sources, tools/
+  docker cp $CID:/opt/venv/lib/python3.12/site-packages/vllm ~/scratch/vllm_ref/vllm   # Python only; kernels are compiled
+  docker rm $CID
+  ```
+  vLLM's own CUDA kernel sources are not in the image (wheel); if one matters,
+  clone `vllm-project/vllm` at tag `v0.29.0`.
+- The EXL3 plugin (`vllm_exl3` 0.4.2) is at
+  `vllm/../vllm_exl3/exl3.py` (site-packages):
+  `apply_exl3_fused_moe` uses exllamav3's own `exl3_moe` (from **v1.4.7**,
+  not the fork) for experts with ≤ 128 rows
   (`TEMP_ROWS_FUSED`) and `apply_exl3_batched_fat` for bigger ones
   (`ext.reconstruct` to fp16 + `ext.hgemm`, per expert, persistent scratch;
   an `exl3_fat_gemm` native kernel for K=4 mcg only, so not for this pack).
@@ -234,6 +248,7 @@ out lower, update the targets above and tell the owner.
 
 ### A1. Read vLLM's implementation of this model (half a day, no downtime)
 
+Copy the sources out of the image first (commands under "vLLM's approach").
 Compare with exllamav3 (`modules/hyperconnections.py`,
 `modules/transformer.py`, `modules/gated_delta_net.py`, `modules/attn.py` or
 equivalent, `modules/block_sparse_mlp.py`, `generator/job.py` prefill):
@@ -269,10 +284,11 @@ b. **Attention prefill** (1.1 s / 8k before; grows with context).
 c. **GatedDeltaNet prefill** (0.7 s / 8k).
 d. **Dense projections at large M**: exl3 GEMM vs reconstruct + fp16 GEMM;
    exllamav3 may already switch by M; measure both for the actual shapes.
-e. **MoE kernel version**: A/B stock 1.5.0's `exl3_moe` against the fork's on
-   a captured layer (build the fork at `f4993fe` — upstream + aarch64 guards
-   — as an extension-only dev build; the aarch64 patch tool for pip's 1.5.0
-   is not on the Spark). Also vLLM's split (≤ 128 rows fused, above:
+e. **MoE kernel version**: A/B the `exl3_moe` that vLLM used (exllamav3
+   v1.4.7, `~/scratch/vllm_ref/exllamav3-1.4.7`, already aarch64-patched;
+   the patch tool is `~/scratch/vllm_ref/vllm-exl3/tools/patch_exllamav3_aarch64.py`)
+   against the fork's on a captured layer, as an extension-only dev build in
+   the tabby image (its torch). Also vLLM's split (≤ 128 rows fused, above:
    reconstruct + hgemm) against the fork's (≤ 256 fused, above: batched
    reconstruct).
 f. **Chunk size 16384** again, once memory headroom allows.
