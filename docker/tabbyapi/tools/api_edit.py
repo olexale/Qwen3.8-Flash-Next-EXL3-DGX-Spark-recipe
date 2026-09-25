@@ -3,15 +3,17 @@
 
 The conversation: a coding-agent system prompt with pi's tools (read, edit, write, bash), a
 task, an assistant `read` tool call, the tool result (a real ~110-line source file from the
-repo: tools/draft_sweep.py's first 110 lines by default), then the model's turn. TabbyAPI
+repo: tools/concurrent_decode.py by default), then the model's turn. TabbyAPI
 renders it with the model's chat template, so tool calls are <function=...><parameter=...>
 blocks with raw multi-line values (oldText quotes the file verbatim). Thinking off
-(chat_template_kwargs), default sampling. Reports decode tok/s (first to last streamed
-token) per request and the median per task.
+(chat_template_kwargs), default sampling. TabbyAPI buffers tool calls until they parse, so
+the decode rate is TabbyAPI's own ("N tokens generated at X T/s" in `docker logs`; run on the
+Spark host). Reports it per request and the median per task.
 
   python3 docker/tabbyapi/tools/api_edit.py            REPS=5 TASKS=edit,rewrite
 """
-import json, os, time, statistics, urllib.request
+import json, os, re, subprocess, time, statistics, urllib.request
+CONTAINER = os.environ.get("TABBY_CONTAINER", "qwen38-tabby")
 URL = f"http://127.0.0.1:{os.environ.get('PORT', '18300')}/v1/chat/completions"
 MODEL = os.environ.get("MODEL", "qwen3.8-flash-next")
 REPS = int(os.environ.get("REPS", "5")); TASKS = os.environ.get("TASKS", "edit,rewrite").split(",")
@@ -30,8 +32,8 @@ TOOLS = [fn("read", "Read the contents of a file.", path="Path to the file"),
          fn("bash", "Run a shell command.", command="The command")]
 TASK = {
     "edit": f"In {REL}, make two changes with the edit tool (one call per change; oldText must quote the whole "
-            "function being changed): make one() retry the request once on a network error, and make main() "
-            "print the per-request rates sorted from fastest to slowest.",
+            "function or statement being changed): make one() retry the request once on a network error, and "
+            "put the three PROMPTS in reverse order.",
     "rewrite": f"Rewrite {REL} with the write tool: the complete file, unchanged except that every comment and "
                "docstring is removed.",
 }
@@ -46,6 +48,7 @@ def one(task):
                        "stream_options": {"include_usage": True}}).encode()
     req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
     first = last = None; usage = None; n = 0
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 1))
     with urllib.request.urlopen(req, timeout=900) as r:
         for line in r:
             line = line.decode().strip()
@@ -57,7 +60,10 @@ def one(task):
                 if delta.get("content") or delta.get("tool_calls") or delta.get("reasoning_content"):
                     now = time.time(); first = first or now; last = now; n += 1
     toks = usage["completion_tokens"] if usage else n
-    return toks, (toks - 1) / (last - first) if last and last > first else float("nan")
+    time.sleep(0.5)
+    log = subprocess.run(["docker", "logs", "--since", since, CONTAINER], capture_output=True, text=True)
+    m = re.findall(r"(\d[\d,]*) tokens generated at\s+([\d.]+) T/s", log.stdout + log.stderr)
+    return toks, float(m[-1][1]) if m else float("nan")
 res = {t: [] for t in TASKS}
 for rep in range(REPS):
     for t in TASKS:
