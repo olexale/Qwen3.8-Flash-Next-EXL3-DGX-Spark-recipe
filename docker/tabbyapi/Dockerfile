@@ -103,6 +103,14 @@ RUN f=/app/backends/exllamav3/model.py \
 COPY patch_tabbyapi_encode_cache.py /tmp/
 RUN python3 /tmp/patch_tabbyapi_encode_cache.py /app && rm /tmp/patch_tabbyapi_encode_cache.py
 
+# Tool-call arguments as the model wrote them: strip only the template's newline
+# on each side of a value and convert types only where the request's tool schema
+# asks for it (the stock parser stripped all whitespace and json.loads'ed every
+# value: JSON files arrived as objects, files lost their final newline, edits
+# lost first-line indentation). TABBY_TOOLCALL_ARGS=0 restores the old parsing.
+COPY patch_tabbyapi_toolcall_args.py /tmp/
+RUN python3 /tmp/patch_tabbyapi_toolcall_args.py /app && rm /tmp/patch_tabbyapi_toolcall_args.py
+
 # Recurrent-state checkpoints stay on the device instead of blocking copies to
 # pageable host memory; see the script. Fails the build if an anchor moved.
 COPY patch_exllamav3_checkpoints.py /tmp/
