@@ -250,3 +250,61 @@ After each shipped change: update `README.md` "What to expect" and the
 `EXL3_*` table, add a dated section to `OPTIMIZATION_PLAN.md` "Results"
 (numbers; what was tried and did not help), commit, push, pull on the Spark.
 Raw logs stay in `logs/` on the Spark (gitignored).
+
+## Findings (2026-09-25)
+
+### B1: where a decode round goes now
+
+`tools/decode_profile.py` (engine, code prompt, 400 tokens, preset sampling, draft 5 /
+conf 0.6 with a calibrator, as deployed). Unprofiled 69.8 tok/s median of 5
+[67.5–72.8]; the profiled run 70.6 tok/s, so the profiler does not distort it. 104
+decode rounds, 3.8 tokens per round (3.5 drafted, 79% accepted). Logs:
+`logs/bench_b1_prof.log`, `logs/bench_b1_prof_mod.log` (with `MODSCOPES=1`: the
+verify forward split by block submodule).
+
+| Part of a round | GPU ms | share |
+|---|---:|---:|
+| **Target verify forward** (1 + ~3.5 rows) | **43.2** | 81% |
+| – MoE (routed experts `exl3_moe_coop_a/b/rot` 15.6, shared expert 2.2, router 1.3) | 19.2 | 36% |
+| – GatedDeltaNet (qkv/z `exl3_mgemm` 4.8, recurrent rule 2.4, out_proj 2.3, rest 0.8) | 10.4 | 20% |
+| – hyper-connection mixers (`gr_dots_i8` 3.6 + `gr_finalize_i8` 3.4, 96 sites) | 7.0 | 13% |
+| – attention (12 layers: qkv 1.5, paged attention 0.9, o 0.7, rest 0.4) | 3.5 | 7% |
+| – lm_head (full 248K head, 1 call) | 1.7 | 3% |
+| – mixer apply, norms, rest | 0.7 | 1% |
+| MTP draft chain (3.4 steps: block 2.2 + 64K head slice 1.6 + mixer) | 4.1 | 8% |
+| MTP prefill of accepted positions | 0.45 | 1% |
+| Sampling, acceptance, GDN state rewind (0.35) | 0.6 | 1% |
+| **GPU idle** | **4.7** | **8.8%** |
+| **Round (wall)** | **53.1** | |
+
+Idle, by what the GPU was between (ms per round, gaps per round):
+
+| Between | ms | gaps |
+|---|---:|---:|
+| kernels inside the verify forward | 2.6 | 1,140 (~2.3 µs each) |
+| sampling / acceptance host work (`iterate_gen` after the forward) | 0.9 | 51 |
+| kernels inside the MTP draft steps | 0.5 | 145 |
+| draft-step readbacks (calibrator, per step) and draft → verify | 0.4 | 15 |
+| MTP prefill of accepted positions | 0.2 | 27 |
+
+What that says, for B2:
+
+- **(a) Host bubbles are small.** The dynamic-draft per-step `.cpu()` path costs
+  ~0.4 ms per round (0.8%); the whole host part of `iterate_gen` another ~0.9 ms
+  (1.7%). The host runs well ahead of the GPU during the verify (10 ms of host
+  time for 43 ms of GPU). The largest idle item is the ~1,140 gaps of ~2.3 µs
+  between kernels inside the verify: GPU-side launch spacing, not host
+  bubbles, and only fewer kernels would remove it.
+- **(b) MTP draft chain: 4.1 ms per round (8%).** ~0.65 ms per step for the
+  block and 0.47 ms for the 64K head slice (105 MB, at bandwidth). Halving the
+  slice (`EXL3_MTP_HEAD_N=32768`) saves at most ~0.8 ms per round (1.5%), and
+  fewer drafts land in the slice.
+- **(c) Dense EXL3 GEMMs.** The qkv/z projections run at ~71% of the 273 GB/s
+  spec, lm_head at bandwidth; the `out_proj` / `o_proj` GEMMs (32×128 tile, ~65
+  µs for 9.8 MB) at ~55%, so at most ~0.7–1 ms per round (1.5–2%) there.
+  The shared-expert GEMMs (1–2 MB) are latency-bound at 17–28 µs each.
+- The routed-expert MoE is at ~82% of spec (README); the recurrent
+  gated-delta rule reads and writes ~20 MB per layer (state plus the per-token
+  rollback history) in 68 µs, at bandwidth; the mixers are a closed lever (README).
+- No single item above is worth more than ~2% on code. The round is
+  weight-streaming bound, so tokens per round is the lever: B3.
