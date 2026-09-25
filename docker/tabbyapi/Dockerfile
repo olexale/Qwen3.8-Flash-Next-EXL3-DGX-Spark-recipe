@@ -112,6 +112,12 @@ RUN python3 /tmp/patch_exllamav3_fused_moe.py && rm /tmp/patch_exllamav3_fused_m
 COPY patch_exllamav3_qsa_stage.py /tmp/
 RUN python3 /tmp/patch_exllamav3_qsa_stage.py && rm /tmp/patch_exllamav3_qsa_stage.py
 
+# GatedDeltaNet chunked prefill without the four full-tensor copies around the
+# FLA kernels; bit-identical. Must run after patch_exllamav3_checkpoints.py.
+# EXL3_GDN_NOCOPY=0 turns it off again.
+COPY patch_exllamav3_gdn_nocopy.py /tmp/
+RUN python3 /tmp/patch_exllamav3_gdn_nocopy.py && rm /tmp/patch_exllamav3_gdn_nocopy.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
@@ -130,7 +136,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_NGRAM_STREAM=1 \
     EXL3_DRAFT_CONFIDENCE=0.6 \
     EXL3_MOE_FUSED_UNIFORM=1 \
-    EXL3_QSA_STAGE=1
+    EXL3_QSA_STAGE=1 \
+    EXL3_GDN_NOCOPY=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \

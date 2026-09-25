@@ -123,6 +123,7 @@ passes them to the container.
 | `EXL3_GR_COLLAPSE` | `1` | the fused hyper-connection collapse kernel (`patch_exllamav3_gr_collapse.py`); `0` = the fork's torch code, ~18% slower long prompts |
 | `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
 | `EXL3_QSA_STAGE` | `1` | sparse attention in prefill dequantizes the 8-bit K/V once per layer (`patch_exllamav3_qsa_stage.py`, bit-identical); `0` = dequantize per gathered tile, ~8% slower long prompts |
+| `EXL3_GDN_NOCOPY` | `1` | GatedDeltaNet prefill without four full-tensor copies (`patch_exllamav3_gdn_nocopy.py`, bit-identical); `0` = the fork's copies, ~1–2% slower long prompts |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
 

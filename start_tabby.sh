@@ -120,7 +120,8 @@ done
 [[ -n "$TABBY_CACHE_VOLUME" ]] && DOCKER_ARGS+=(-v "$TABBY_CACHE_VOLUME:/home/tabby/.cache")
 # GB10 engine knobs: forwarded only when set, so the image's defaults apply otherwise.
 for v in EXL3_DRAFT_CONFIDENCE EXL3_GR_INT8 EXL3_MOE_COOP_WIDE EXL3_INT8_GEMV \
-         EXL3_MTP_HEAD_N EXL3_NGRAM_STREAM EXL3_MOE_FUSED_UNIFORM EXL3_GR_COLLAPSE EXL3_QSA_STAGE; do
+         EXL3_MTP_HEAD_N EXL3_NGRAM_STREAM EXL3_MOE_FUSED_UNIFORM EXL3_GR_COLLAPSE EXL3_QSA_STAGE \
+         EXL3_GDN_NOCOPY; do
     if [[ -n "${!v:-}" ]]; then DOCKER_ARGS+=(-e "$v=${!v}"); fi
 done
 read -ra _extra_docker <<<"$TABBY_EXTRA_DOCKER_ARGS"
