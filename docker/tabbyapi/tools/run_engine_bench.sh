@@ -9,7 +9,8 @@
 #
 #   SCRIPT=moe_trace.py docker/tabbyapi/tools/run_engine_bench.sh trace
 #
-# SCRIPT picks another script from this directory (default engine_bench.py).
+# SCRIPT picks another script from this directory (default engine_bench.py); IMAGE another
+# image (default qwen38-exl3-tabby:latest).
 # Output: logs/bench_<name>.log in the repo root.
 set -euo pipefail
 name=${1:?usage: run_engine_bench.sh <name> [docker run args...]}; shift
@@ -27,7 +28,7 @@ bash "$ROOT/scripts/exl3_native/tuning/drop-model-cache.sh" "$MODEL_DIR" >/dev/n
 [[ -n "${TABBY_CACHE_VOLUME-qwen38-tabby-cache}" ]] && ARGS+=(-v "${TABBY_CACHE_VOLUME-qwen38-tabby-cache}:/home/tabby/.cache")
 docker run --rm --gpus all --cpuset-cpus 5-9,15-19 "${ARGS[@]}" \
     -v "$HERE/${SCRIPT:-engine_bench.py}:/tmp/bench.py:ro" \
-    --entrypoint python3 "$@" qwen38-exl3-tabby:latest /tmp/bench.py \
+    --entrypoint python3 "$@" "${IMAGE:-qwen38-exl3-tabby:latest}" /tmp/bench.py \
     > "$ROOT/logs/bench_$name.log" 2>&1 || true
 grep -E "CONFIG|loaded|RESULT|MEM|PROFILE|FLAGS|TIER|TIME|SCOPE|LAYER|DONE|Error|error" "$ROOT/logs/bench_$name.log" | tail -${TAIL:-20}
 echo "full log: logs/bench_$name.log"
