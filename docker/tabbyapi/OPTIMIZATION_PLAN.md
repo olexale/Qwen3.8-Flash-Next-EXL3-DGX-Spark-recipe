@@ -679,3 +679,18 @@ needs the GatedDeltaNet chunk state at the page boundary from inside the forward
 per-64-token chunk states) and the conv/PLE windows from the inputs; the rows' outputs may not
 be bit-identical to the two-forward split (different MoE/attention batch shapes), so it needs
 the greedy/needle gates and the owner's approval.
+
+### Tool-call arguments (2026-09-25, correctness)
+
+The prefix diagnostic showed a follow-up prompt diverging inside the previous answer's tool
+call. Cause: TabbyAPI's `qwen3_coder` parser stripped all whitespace around each argument and
+`json.loads`'ed it regardless of the tool schema, so pi received damaged arguments (a `write` of
+package.json as an object, files without their final newline, `edit` oldText without its first
+line's indentation, `42`/`true` as a number/boolean), and the next turn's rendering no longer
+matched the model's text. **Shipped `patch_tabbyapi_toolcall_args.py`** (`TABBY_TOOLCALL_ARGS=1`,
+image `:latest`, rollback `:pre-toolargs`): strip only the template's newline on each side, type
+by the request's schema (as vLLM's parser does). `tests/test_toolcall_args.py`: 12 tests, all
+failing on the old image, all passing on the new, including a byte-exact round trip through
+TabbyAPI's renderer and the model's template. Through the API: a `write` of package.json arrives
+as text with its final newline, and the next turn matches the whole previous answer.
+

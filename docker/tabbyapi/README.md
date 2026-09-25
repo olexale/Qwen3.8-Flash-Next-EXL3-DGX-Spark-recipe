@@ -129,6 +129,7 @@ passes them to the container.
 | `EXL3_MOE_BSZN_MAX` | `16` | largest verify batch (rows) the fused decode MoE kernels take (`patch_exllamav3_bszn16.py`). 16 keeps 9–16-row verifies (long lookup drafts, two or three sessions drafting) off the ~45 ms slower prefill kernel: three sessions 54 → 62 tok/s together. `8` = the old limit, bit-identical to before |
 | `EXL3_HIST_STASH` | `1` | recurrent checkpoints at every page boundary of the output, copied from the speculative-decoding rollback history (`patch_exllamav3_hist_stash.py`; bit-identical to the fork's own checkpoints), so a follow-up turn resumes at the end of the previous answer instead of prefilling it again: about 0.2 s less time to first token per agent turn. `0` = the fork's checkpoints every 2,048 tokens |
 | `EXL3_PREFIX_DIAG` | `0` | `1` logs one `[prefix-diag]` line per request (`patch_exllamav3_prefix_diag.py`, log-only): how much of the cached prefix was matched and resumed, how much was lost for lack of a recurrent checkpoint, and where the new prompt diverges from the previous turn's output (lengths and marker positions only, no text) |
+| `TABBY_TOOLCALL_ARGS` | `1` | tool-call arguments as the model wrote them (`patch_tabbyapi_toolcall_args.py`): a value loses only the template's newline on each side and is converted from text only where the request's tool schema declares a non-string type. The stock parser stripped all whitespace and `json.loads`'ed every value: a `write` of a JSON file reached the client as an object, written files lost their final newline, an `edit` lost its first line's indentation, a file containing `42` became a number. `0` = the stock parser |
 | `TABBY_ENCODE_CACHE` | `1` | follow-up turns tokenize only what follows the shared conversation prefix (`patch_tabbyapi_encode_cache.py`, same token ids); `0` = tokenize the whole prompt each turn, `verify` = also check against it |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
@@ -214,3 +215,16 @@ RAM, other fused row limits, chunk 4096. Details:
 | build fails at the `EXL3_DRAFT_CONFIDENCE` step | TabbyAPI's code changed at `TABBYAPI_REF`; keep the pinned commit |
 | `ERROR: TabbyAPI requires exllamav3 1.5.1` | `TABBYAPI_REF` was moved past `2186cdb`; the fork reports 1.5.0 |
 | images are ignored or rejected | check that `vision: true` is in `config.yml` and that `preprocessor_config.json` is in the model folder |
+
+## Tests
+
+`tests/run_tests.sh` runs the patch tests (`tests/test_*.py`, a small runner, no pytest in
+the image) inside an image on the Spark, next to a serving TabbyAPI (no model is loaded):
+
+```bash
+IMAGE=qwen38-exl3-tabby:<new tag> docker/tabbyapi/tests/run_tests.sh
+```
+
+Run it on every new image before tagging it `:latest`. Engine-level checks that need the model
+and a stopped TabbyAPI stay in `tools/` (`hist_stash_test.py`, `greedy_ab.py`, `logit_dump.py`).
+
