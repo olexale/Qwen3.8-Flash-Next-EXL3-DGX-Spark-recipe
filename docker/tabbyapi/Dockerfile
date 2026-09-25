@@ -60,8 +60,8 @@ RUN pip install --upgrade pip setuptools wheel ninja \
 #    hyper-connection stream collapse in prefill (patch_exllamav3_gr_collapse.py,
 #    bit-identical to the torch code it replaces; EXL3_GR_COLLAPSE=0 turns it
 #    off), and room for 16-row batches in the fused decode MoE kernels
-#    (patch_exllamav3_bszn16.py; the limit stays 8 unless EXL3_MOE_BSZN_MAX=16,
-#    bit-identical at 8). --no-build-isolation so setup.py sees the torch above; without it the
+#    (patch_exllamav3_bszn16.py; EXL3_MOE_BSZN_MAX=16 in the image, 8 restores
+#    the old limit bit-identically). --no-build-isolation so setup.py sees the torch above; without it the
 #    extension is silently skipped.
 # ---------------------------------------------------------------------------
 COPY patch_exllamav3_gr_collapse.py patch_exllamav3_bszn16.py /tmp/
@@ -130,7 +130,8 @@ RUN python3 /tmp/patch_exllamav3_gdn_nocopy.py && rm /tmp/patch_exllamav3_gdn_no
 # Prompt-lookup drafting alongside the MTP head: when the output repeats text in
 # the context (edit tool calls, file rewrites), draft the continuation of the
 # match instead of running the MTP chain. Verification is unchanged, so outputs
-# are unchanged. Off by default (EXL3_PLD=1 turns it on); see the script.
+# are unchanged. On (EXL3_PLD=1, drafts of up to 11 tokens, EXL3_PLD_MAX); see
+# the script. EXL3_PLD=0 turns it off.
 COPY patch_exllamav3_pld.py /tmp/
 RUN python3 /tmp/patch_exllamav3_pld.py && rm /tmp/patch_exllamav3_pld.py
 
@@ -155,8 +156,9 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_QSA_STAGE=1 \
     EXL3_GDN_NOCOPY=1 \
     TABBY_ENCODE_CACHE=1 \
-    EXL3_PLD=0 \
-    EXL3_MOE_BSZN_MAX=8
+    EXL3_PLD=1 \
+    EXL3_PLD_MAX=11 \
+    EXL3_MOE_BSZN_MAX=16
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \

@@ -35,6 +35,11 @@ model:
   # chunks prefill faster: 20k cold prompt 42.8 s at 2048, 31.7 s at 4096,
   # 26.7 s at 8192 (TabbyAPI's default is 2048).
   chunk_size: 8192
+  # Three concurrent jobs (pi runs up to three sessions). Each batch slot holds
+  # the GatedDeltaNet rollback history for speculative drafts, ~113 MB per drafted
+  # token; with prompt-lookup drafts of up to 11 tokens (EXL3_PLD_MAX) a fourth
+  # slot would cost ~1.4 GiB more (TabbyAPI's default for this model is 4).
+  max_batch_size: 3
   # Images via image_url content parts. The pack ships preprocessor_config.json,
   # which is what makes exllamav3 load the vision tower.
   vision: true
