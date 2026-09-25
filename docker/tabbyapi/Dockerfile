@@ -124,6 +124,13 @@ RUN python3 /tmp/patch_exllamav3_qsa_stage.py && rm /tmp/patch_exllamav3_qsa_sta
 COPY patch_exllamav3_gdn_nocopy.py /tmp/
 RUN python3 /tmp/patch_exllamav3_gdn_nocopy.py && rm /tmp/patch_exllamav3_gdn_nocopy.py
 
+# Prompt-lookup drafting alongside the MTP head: when the output repeats text in
+# the context (edit tool calls, file rewrites), draft the continuation of the
+# match instead of running the MTP chain. Verification is unchanged, so outputs
+# are unchanged. Off by default (EXL3_PLD=1 turns it on); see the script.
+COPY patch_exllamav3_pld.py /tmp/
+RUN python3 /tmp/patch_exllamav3_pld.py && rm /tmp/patch_exllamav3_pld.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
@@ -144,7 +151,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_MOE_FUSED_UNIFORM=1 \
     EXL3_QSA_STAGE=1 \
     EXL3_GDN_NOCOPY=1 \
-    TABBY_ENCODE_CACHE=1
+    TABBY_ENCODE_CACHE=1 \
+    EXL3_PLD=0
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
