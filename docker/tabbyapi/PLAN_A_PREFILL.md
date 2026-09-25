@@ -353,6 +353,70 @@ h. A **new MoE prefill kernel** (e.g. 256-thread blocks with a bigger
    Largest ceiling, weeks of work, ~25% odds: **ask the owner before
    starting.**
 
+## Findings (2026-09-25)
+
+### A0: the vLLM reference
+
+See the correction under "Goal": vLLM's "Avg prompt throughput" credits a whole
+prompt in the window where its first token arrives. The 29k-token prompts behind
+the 2,900 tok/s lines took ≥ 20 s (≤ ~1,450 tok/s; ~880 tok/s from the timeline).
+vLLM also scheduled 2,048 tokens per step. No measured reference is above
+TabbyAPI's own numbers.
+
+### A2: where a prefill goes now (`module_times.py KERNELS=10`, before any A3 change)
+
+8,192-token prompt, 7.07 s (was 8.4 s before `gr_collapse`); 32,768 tokens,
+26.5 s (1,236 tok/s). GPU time by module, 32k (8k in brackets):
+
+| Module | 32k | Top kernels (8k) |
+|---|---:|---|
+| MoE | 11.3 s (42%) | `exl3_moe<64-row>` 1.02 s, batched reconstruct 0.31 s + its cutlass GEMMs ~0.6 s, `exl3_moe<16>` 0.25, gather 0.23 |
+| Attention (12 layers) | 4.4 s (17%) | `_qsa_sparse_split_kernel` 0.99 of 1.09 s; indexer/top-k/rope < 0.1 s |
+| Blocks' own code (HC glue) | 3.8 s (14%) | `hc_apply` 0.33, `rms_norm` 0.21, `gr_collapse` 0.16, mixer GEMMs 0.26 (~40 TFLOPS) |
+| Dense projections | 2.9 s (11%) | reconstruct + cuBLAS; `in_proj_qkv` runs at ~58 TFLOPS |
+| GatedDeltaNet | 2.7 s (10%) | copies/casts 0.29 of 0.70 s; FLA chunk kernels ~0.35 |
+
+Attention scales linearly with context (each query attends to its 2,048
+selected tokens), so its share is the same at 8k and 32k.
+
+### A1: vLLM (0.29.0 image, 0.30.0 source) against exllamav3, ranked by time here
+
+1. **QSA sparse attention** (17%): same algorithm and tile shape in both (one
+   program per query row and KV head, 16-row head tile, 2,048-token selection).
+   vLLM keeps a bf16 KV cache; our cache is 8-bit, and the gather kernel
+   dequantized every gathered tile, i.e. each cached token once per query row
+   that selects it. **Shipped: `patch_exllamav3_qsa_stage.py`** (dequantize once
+   per layer, bit-identical, kernel 2.0x). Launch settings from vLLM do not
+   carry over to sm_121: 0.30.0's prefill config (1 warp) is 0.59x here,
+   `BLOCK_N=64` 0.87x, 2 warps/3 stages 1.12x but not bit-identical.
+   0.30.0 #54873 (skip padded index tiles): our rows are ~99% valid past the
+   first sparse chunk (86% in it); < 1%. #54513 (separate prefill indexer
+   kernels): our indexer + top-k is < 0.1 s per 8k; < 1%.
+2. **MoE** (42%): vLLM runs v1.4.7's `exl3_moe` for ≤ 128 rows and per-expert
+   reconstruct + hgemm above; the fork uses ≤ 256 rows fused and a batched
+   reconstruct tier. At 8k rows the MoE runs at ~13 TFLOPS effective against
+   ~58 TFLOPS cuBLAS reaches on the dense projections. **A3e answered from
+   source + earlier runs:** v1.4.7's `exl3_moe_kernel.cuh` is the fork's 16-row
+   tier alone (the fork added the 32/64-row instances on top, same inner GEMM);
+   `EXL3_MOE_MTILE=0` runs exactly that and measured 949 vs 1,026 tok/s, and
+   vLLM's ≤ 128-row split is "fused rows 128", measured 1,008. Both slower; no
+   build needed. What is left in the MoE is a new kernel (A3h, owner's go).
+3. **Hyper-connection glue** (14%): vLLM keeps the residual streams in bf16 and
+   fuses each site's residual update with the next site's RMSNorm
+   (`hc_combine_norm`); exllamav3 keeps fp32 streams (so vLLM's kernels cannot
+   be copied without changing numerics) and runs `hc_apply` and `rms_norm` as
+   separate passes over ~335 MB (8k rows). A fused apply + norm that keeps the
+   norm's reduction order would drop one read per site (~0.1–0.2 s per 8k).
+4. **GatedDeltaNet** (10%): vLLM uses a fused norm + packed core op; ours spends
+   ~40% of the module in four full-tensor copies (transpose/cast into the conv,
+   FLA's `input_guard` on the q/k/v views, `cat` of one output).
+   `patch_exllamav3_gdn_nocopy.py` removes them (in test).
+5. **Dense projections** (11%): exllamav3 already reconstructs to fp16 and
+   uses cuBLAS at large M, near the GEMM rate measured here. Nothing to take.
+6. **Per-block glue in 0.30.0** (#55309 fused PLE residual + QSA output gate,
+   #54517 PLE kernels): here `mul_sigmoid` is 0.015 s and the PLE layer 0.04 s
+   per 8k; < 1% together.
+
 ## Gates for every change
 
 1. **Parity on real inputs**: capture the module's real inputs during a

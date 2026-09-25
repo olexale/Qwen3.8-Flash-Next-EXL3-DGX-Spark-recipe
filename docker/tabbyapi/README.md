@@ -122,19 +122,20 @@ passes them to the container.
 | `EXL3_NGRAM_STREAM` | `1` | read the ~30 GiB n-gram table from NVMe as needed; `0` loads all of it into RAM (no faster, about 30 GiB more memory) |
 | `EXL3_GR_COLLAPSE` | `1` | the fused hyper-connection collapse kernel (`patch_exllamav3_gr_collapse.py`); `0` = the fork's torch code, ~18% slower long prompts |
 | `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
+| `EXL3_QSA_STAGE` | `1` | sparse attention in prefill dequantizes the 8-bit K/V once per layer (`patch_exllamav3_qsa_stage.py`, bit-identical); `0` = dequantize per gathered tile, ~8% slower long prompts |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
 
 ## What to expect
 
-Measured 2026-09-24 through the API:
+Measured 2026-09-25 through the API:
 
 | | |
 |---|---|
-| Memory in use while serving | about 72 GiB of device memory plus 4 GiB host with three ~115k-token conversations cached; system total under 80 GiB |
-| Prefill, cold prompt | about 1,180–1,230 tok/s (24k-token prompt: 21 s; 115k: 94 s) |
+| Memory in use while serving | about 72 GiB of device memory plus 4 GiB host with three ~115k-token conversations cached; system total ~79.5 GiB |
+| Prefill, cold prompt | about 1,280–1,330 tok/s (24k-token prompt: 19 s; 115k: 87 s) |
 | Cold short prompt, ~600 tokens | about 1.1 s to first token |
-| Follow-up turn, cached history + ~850 new tokens | about 1.5 s on a 25k conversation, 1.6–2.0 s on 115k (1.2–1.6 s server-side) |
+| Follow-up turn, cached history + ~850 new tokens | about 1.5 s on a 25k conversation, 1.6–1.9 s on 115k |
 | Conversations kept in the prefix cache | three at full length (262,144 tokens each) |
 | Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–56), one session |
 | Decode, three sessions at once | about 54 tok/s together, ~18–20 each |
@@ -151,6 +152,10 @@ What keeps it fast, so keep these when you edit:
   stream collapse that the fork runs in torch during prefill (four ~335 MB fp32
   temporaries per call on an 8k chunk). Bit-identical output, long prompts ~18%
   faster (`EXL3_GR_COLLAPSE=0` turns it off).
+- `patch_exllamav3_qsa_stage.py`: the sparse attention kernel dequantized each
+  gathered 8-bit K/V tile once per query row; the patch dequantizes the
+  sequence once per layer. Bit-identical, the kernel 2x, long prompts ~8%
+  faster (`EXL3_QSA_STAGE=0` turns it off).
 - `chunk_size: 8192` in `config.yml` (TabbyAPI's default of 2048 is much slower;
   16384 is 1.7% faster still but needs 1.6 GiB more).
 - `patch_exllamav3_checkpoints.py` (recurrent-state checkpoints stay on the GPU

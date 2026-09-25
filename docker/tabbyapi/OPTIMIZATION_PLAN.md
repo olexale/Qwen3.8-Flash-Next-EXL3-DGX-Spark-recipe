@@ -532,3 +532,31 @@ touch it.
 | Decode | ~56 tok/s (one sample) | 54 tok/s (median of 10), 54 with three sessions (was 26) | not lower |
 
 Left open: T5 (prompt-lookup drafting) needs a recorded pi session.
+
+### Sparse attention: 8-bit K/V staged once per layer (2026-09-25, bit-identical)
+
+Plan: `PLAN_A_PREFILL.md` (A0–A2 findings there). With the 8-bit cache, the QSA
+gather kernel (`_qsa_sparse_split_kernel`, 17% of a 32k prefill) dequantized
+every K/V tile it gathered, so each cached token once per query row selecting
+it (~2,048 per row). `patch_exllamav3_qsa_stage.py` adds a staging kernel that
+dequantizes the sequence's positions once per layer (same `_qc_load_v`
+expression, rotated domain) and runs the gather on fp16. Only for one sequence
+and when rows x index width ≥ 4 x positions (so never decode or MTP verify).
+
+- Kernel, captured prefill inputs (`tools/qsa_capture.py`, `tools/qsa_ab.py`):
+  204 → 100 ms over 4 calls, 0 of 122,873,856 output elements differ.
+- End to end (`tools/prefill_parity.py`, off/on in one process): logits of the
+  first 4 new tokens bit-identical at 3k, 9k, 20k.
+- Engine benchmark, chunk 8192: cold 3k 3.22 → 3.03 s, 12k 10.6 → 9.73 s,
+  20k 16.9 → 15.6 s (1,281 tok/s), 40k 32.3 → 29.7 s (**1,349 tok/s**),
+  follow-up 20k + 600 1.26 → 1.23 s. Cold 600 unchanged (dense attention).
+- API: cold 24.5k 20.8 → 19.2 s; three cold ~115k prompts **1,329–1,331 tok/s**
+  (1,228–1,233); follow-ups on them 1.56–1.94 s at the client; cold 573 tokens
+  1.13 s; follow-up 25k + ~680 new 1.48 s; decode one session 54.4 tok/s
+  median of 10 (48.8–57.7), three sessions ~54 aggregate; memory 79.5 GiB
+  system-wide (79.0 before; staging holds n_tok x 2 KiB per layer transiently).
+
+Tried on the same kernel, no gain on sm_121: vLLM 0.30.0's prefill launch
+(1 warp) 0.59x, `BLOCK_N=64` 0.87x (also not bit-identical), 2 warps / 3 stages
+1.12x but not bit-identical; 8 warps 0.39x. Rollback image:
+`qwen38-exl3-tabby:pre-qsastage`.
