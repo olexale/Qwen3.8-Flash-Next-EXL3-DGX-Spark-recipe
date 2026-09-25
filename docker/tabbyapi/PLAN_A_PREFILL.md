@@ -200,6 +200,18 @@ does **not** split at every 2,048-token checkpoint (checked).
   ```
   vLLM's own CUDA kernel sources are not in the image (wheel); if one matters,
   clone `vllm-project/vllm` at tag `v0.29.0`.
+- **A second, newer reference: vLLM `v0.30.0`**, which added performance work
+  for exactly this model. Read-only (never build or run it here); clone it
+  next to the others: `git clone --depth 1 --branch v0.30.0
+  https://github.com/vllm-project/vllm ~/scratch/vllm_ref/vllm-0.30.0`.
+  The relevant PRs: #54513 separate prefill and decode QSA indexer kernels
+  (attention prefill, A3b), #54873 padded-index skipping in sparse GQA
+  (A3b), #55309 fused PLE residual and QSA output gate (per-block glue,
+  A3a), #54517 fused PLE kernels (n-gram layer, small here), #55272
+  torch.compile removed from the NVIDIA implementation (the fusions became
+  explicit kernels — read them, they are what to port). Its speed on this
+  machine is **unmeasured**: the ≥ 2,900 tok/s reference is 0.29.0. Treat
+  0.30.0 as a source of ideas, each still measured on our side.
 - The EXL3 plugin (`vllm_exl3` 0.4.2) is at
   `vllm/../vllm_exl3/exl3.py` (site-packages):
   `apply_exl3_fused_moe` uses exllamav3's own `exl3_moe` (from **v1.4.7**,
@@ -259,7 +271,10 @@ equivalent, `modules/block_sparse_mlp.py`, `generator/job.py` prefill):
 - how dense EXL3 projections run at large M (exl3 GEMM, or reconstruct +
   cuBLAS/hgemm);
 - MoE: stock `exl3_moe` launch parameters vs the fork's tier plan;
-- prefill chunk size (`max_num_batched_tokens` default in that vLLM).
+- prefill chunk size (`max_num_batched_tokens` default in that vLLM);
+- then the v0.30.0 PRs above: what each kernel does, and whether our path
+  has the same inefficiency (indexer prefill, sparse-GQA padding, PLE/QSA
+  gate fusion).
 
 Write the findings into this file under a new "Findings" section, with the
 concrete differences ranked by likely time.
