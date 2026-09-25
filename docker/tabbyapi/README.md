@@ -127,6 +127,7 @@ passes them to the container.
 | `EXL3_PLD` | `1` | prompt-lookup drafting alongside MTP (`patch_exllamav3_pld.py`): when the output repeats text in the context (edit tool calls, file rewrites), draft the continuation of the match instead of the rest of the MTP chain (if the MTP head's first token agrees, `EXL3_PLD_GATE=1`). Outputs unchanged (drafts are verified); through the API edit tool calls 82 → 103 tok/s, whole-file rewrites 85 → 132. `0` turns it off |
 | `EXL3_PLD_START` / `EXL3_PLD_MAX` / `EXL3_PLD_MIN_MATCH` | `7` / `11` / `8` | lookup draft length (first, and after a fully accepted lookup round), and the shortest match used. The cap is also limited by the MoE decode row limit minus one; `EXL3_PLD=1` keeps `EXL3_PLD_MAX` rows of recurrent-state history per batch slot (~113 MB each above the 5 MTP needs) |
 | `EXL3_MOE_BSZN_MAX` | `16` | largest verify batch (rows) the fused decode MoE kernels take (`patch_exllamav3_bszn16.py`). 16 keeps 9–16-row verifies (long lookup drafts, two or three sessions drafting) off the ~45 ms slower prefill kernel: three sessions 54 → 62 tok/s together. `8` = the old limit, bit-identical to before |
+| `EXL3_HIST_STASH` | `1` | recurrent checkpoints at every page boundary of the output, copied from the speculative-decoding rollback history (`patch_exllamav3_hist_stash.py`; bit-identical to the fork's own checkpoints), so a follow-up turn resumes at the end of the previous answer instead of prefilling it again: about 0.2 s less time to first token per agent turn. `0` = the fork's checkpoints every 2,048 tokens |
 | `EXL3_PREFIX_DIAG` | `0` | `1` logs one `[prefix-diag]` line per request (`patch_exllamav3_prefix_diag.py`, log-only): how much of the cached prefix was matched and resumed, how much was lost for lack of a recurrent checkpoint, and where the new prompt diverges from the previous turn's output (lengths and marker positions only, no text) |
 | `TABBY_ENCODE_CACHE` | `1` | follow-up turns tokenize only what follows the shared conversation prefix (`patch_tabbyapi_encode_cache.py`, same token ids); `0` = tokenize the whole prompt each turn, `verify` = also check against it |
 
@@ -138,10 +139,11 @@ Measured 2026-09-25 through the API (image `:pld11`):
 
 | | |
 |---|---|
-| Memory in use while serving | system total ~81.5 GiB with three ~117k-token conversations cached (78.6 before prompt-lookup drafting's rollback history and the 16-row decode path) |
+| Memory in use while serving | system total ~81.5 GiB with three ~117k-token conversations cached (78.6 before prompt-lookup drafting's rollback history and the 16-row decode path), measured on a freshly started server. Recurrent checkpoints then accumulate up to `sysmem_recurrent_cache` (8 GiB): after a few hours of use expect up to ~5–8 GiB more |
 | Prefill, cold prompt | about 1,280–1,330 tok/s (24k-token prompt: 19 s; 115k: 87 s) |
 | Cold short prompt, ~600 tokens | about 1.1 s to first token |
 | Follow-up turn, cached history + ~850 new tokens | about 1.5 s on a 25k conversation, 1.6–1.9 s on 115k |
+| Agent turn after a model answer + ~350-token tool result | about 0.9–1.1 s (1.1–1.3 s before `EXL3_HIST_STASH`, which resumes after the answer instead of prefilling it again) |
 | Conversations kept in the prefix cache | three at full length (262,144 tokens each) |
 | Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–60), one session |
 | Decode, three sessions at once | about 62 tok/s together, ~20 each |

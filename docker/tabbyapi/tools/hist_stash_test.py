@@ -5,16 +5,18 @@
    recurrent state buffers, run the engine's own rewind to the page boundary + stash()
    (what the fork's boundary truncation would store), compare with the history copy bit for
    bit, restore the buffers. Prints PARITY checks/mismatches per layer type.
-2. Follow-ups: per conversation (CTX-token prompt, OUT greedy tokens, then NEW new tokens),
-   the follow-up's resume position, time to first token and FUP greedy tokens, with the patch
-   on and off (off: the recurrent cache is cleared first and the turn replayed, so the
-   follow-up resumes at the previous prompt's last page as before). Prints where the two
-   follow-ups' greedy tokens diverge, if they do.
+2. Follow-ups: per conversation (CTX-token prompt, OUT greedy tokens with the patch on, then
+   NEW new tokens), the same follow-up three ways: "on" (resumes at the answer's last page
+   boundary), "off" (recurrent cache cleared, the previous prompt prefilled again: resumes at
+   its last page and prefills the answer, as before the patch), "cold" (cache cleared: full
+   prefill, the reference). Resume position, time to first token, and where the FUP greedy
+   tokens of on/off diverge from cold. CTX default 10500 keeps the answer's boundary off the
+   fork's 2,048-token grid.
 
   SCRIPT=hist_stash_test.py IMAGE=qwen38-exl3-tabby:histstash \
     docker/tabbyapi/tools/run_engine_bench.sh hs -e EXL3_HIST_STASH=1 -e CHUNK=8192 -e MBS=3
 
-Env: CTX=12000 OUT=400 NEW=350 FUP=128 CONVS=3
+Env: CTX=10500 OUT=400 NEW=350 FUP=128 CONVS=3
 """
 import os, time, random
 import torch
@@ -26,7 +28,7 @@ from exllamav3.constants import PAGE_SIZE
 
 MODEL = os.environ.get("MODEL", "/models/qwen3.8-flash-next")
 MBS = int(os.environ.get("MBS", "3")); CHUNK = int(os.environ.get("CHUNK", "8192"))
-CTX = int(os.environ.get("CTX", "12000")); OUT = int(os.environ.get("OUT", "400"))
+CTX = int(os.environ.get("CTX", "10500")); OUT = int(os.environ.get("OUT", "400"))
 NEW = int(os.environ.get("NEW", "350")); FUP = int(os.environ.get("FUP", "128"))
 CONVS = int(os.environ.get("CONVS", "3"))
 assert gm._HS_ON, "run with EXL3_HIST_STASH=1"
@@ -104,28 +106,31 @@ def run(ids, max_new):
     return (first or time.time()) - t, torch.cat(out), job.cached_pages * PAGE_SIZE
 
 run(torch.cat([text(1024, 1), enc("<|im_end|>\n<|im_start|>assistant\n<think>\n")]), 2)
+def diverge(x, y):
+    n = min(x.shape[0], y.shape[0]); ne = (x[:n] != y[:n]).nonzero()
+    return "identical" if not ne.numel() else f"diverge at {int(ne[0, 0])}"
 for c in range(CONVS):
     base = torch.cat([enc("<|im_start|>user\n"), text(CTX + 37 * c, 100 + c),
                       enc("\nContinue the text.<|im_end|>\n<|im_start|>assistant\n<think>\n")])
-    res = {}
-    for arm in ("on", "off"):
-        gm._HS_ON = arm == "on"
-        gen.recurrent_cache.clear(); gen.recurrent_cache.update_total_size()
-        _, ans, _ = run(base, OUT)
-        follow = torch.cat([base, ans, enc("<|im_end|>\n<|im_start|>user\n<tool_response>\n"), text(NEW, 900 + c),
-                            enc("\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n")])
-        dt, fo, resumed = run(follow, FUP)
-        res[arm] = (ans, fo)
-        print(f"RESULT conv {c} {arm:>3}: prompt {base.shape[0]} + answer {ans.shape[0]}, follow-up {follow.shape[0]}: "
-              f"resumed {resumed} (answer ends {base.shape[0] + ans.shape[0]}), ttft {dt:.3f}s", flush=True)
     gm._HS_ON = True
-    a_on, f_on = res["on"]; a_off, f_off = res["off"]
-    same_ans = a_on.shape == a_off.shape and torch.equal(a_on, a_off)
-    n = min(f_on.shape[0], f_off.shape[0])
-    ne = (f_on[:n] != f_off[:n]).nonzero()
-    div = int(ne[0, 0]) if ne.numel() else None
-    print(f"RESULT conv {c}: answers identical: {same_ans}; follow-up greedy tokens "
-          f"{'identical (' + str(n) + ')' if div is None else 'diverge at ' + str(div)}", flush=True)
+    gen.recurrent_cache.clear(); gen.recurrent_cache.update_total_size()
+    _, ans, _ = run(base, OUT)
+    follow = torch.cat([base, ans, enc("<|im_end|>\n<|im_start|>user\n<tool_response>\n"), text(NEW, 900 + c),
+                        enc("\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n")])
+    res = {}
+    for arm in ("on", "off", "cold"):
+        if arm != "on":
+            gm._HS_ON = False
+            gen.recurrent_cache.clear(); gen.recurrent_cache.update_total_size()
+            if arm == "off":
+                run(base, 1)  # the previous turn's prompt checkpoints, as without the patch
+        dt, fo, resumed = run(follow, FUP)
+        res[arm] = fo
+        print(f"RESULT conv {c} {arm:>4}: prompt {base.shape[0]} + answer {ans.shape[0]} (ends {base.shape[0] + ans.shape[0]}), "
+              f"follow-up {follow.shape[0]}: resumed {resumed}, ttft {dt:.3f}s", flush=True)
+    gm._HS_ON = True
+    print(f"RESULT conv {c} greedy follow-up ({FUP} tokens): on vs cold {diverge(res['on'], res['cold'])}, "
+          f"off vs cold {diverge(res['off'], res['cold'])}, on vs off {diverge(res['on'], res['off'])}", flush=True)
 print(f"PARITY checks {par['checks']} mismatches {par['mismatch']} by type {par['by_type']}", flush=True)
 print(f"METRICS {gm._hs_metrics}", flush=True)
 print("DONE", flush=True)

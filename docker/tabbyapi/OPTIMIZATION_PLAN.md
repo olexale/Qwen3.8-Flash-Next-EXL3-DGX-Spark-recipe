@@ -627,3 +627,55 @@ Plan and all numbers: [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25). 
 - Tried, no help: lookup drafts of 15 on the 8-row path (the prefill-kernel verify costs
   ~45 ms more per round; edit 83 vs 91 tok/s), ungated lookups (repeated code fragments:
   −4% on greedy_ab's code prompt), minimum match 5 instead of 8 (no gain).
+
+### Follow-up turns: re-prefilled answers, and where the time goes (2026-09-25)
+
+**What a real pi session showed** (`patch_exllamav3_prefix_diag.py`, `EXL3_PREFIX_DIAG=1`, one
+log line per request with the cached/resumed lengths and where the prompt diverges from the
+previous turn; lengths only). 20 turns, 5k → 33k context: pi sends the thinking back, and every
+prompt matches the whole previous answer token for token. Still, 31.7k tokens were prefilled
+where 18.1k were new: 11.0k because no recurrent checkpoint covered the previous answer (the fork
+stashes one every 2,048 tokens during generation, so a turn resumes at the previous *prompt's*
+last page and prefills the answer again, ~330 tokens per turn; plus one 5,120-token replay when
+the prompt changed near the end of the previous prompt), 2.6k to 256-token page rounding.
+Decode was 85% of the session's wall time (48–77 tok/s), time to first token 15%.
+
+**Where a follow-up's time to first token goes** (`tools/followup_profile.py`, engine, 16k
+conversation + 300-token answer + N new tokens):
+
+| new tokens | forward 1 (to the last page boundary) | forward 2 (the partial last page) | first decode round | TTFT | one forward instead of two |
+|---:|---|---|---:|---:|---:|
+| 100 | 512 rows, 690 ms | 44 rows, 230 ms | 40 ms | 0.96 s | 0.81 s |
+| 350 | 768 rows, 900 ms | 38 rows, 215 ms | 42 ms | 1.18 s | 0.99 s |
+| 1,000 | 1,280 rows, 1,250 ms | 176 rows, 427 ms | 41 ms | 1.73 s | 1.43 s |
+
+Page allocation, state restore, stashes and the MTP draft prefill are < 20 ms together. A
+prefill forward costs ~0.2 s before it does any work (a few dozen rows already touch nearly
+all 512 experts); the fork runs the partial last page as a second forward to get a recurrent
+checkpoint at the page boundary, so a follow-up pays that twice. Dropping the split outright
+loses that checkpoint (the next turn then falls back to an older one: 5.8 s in the test), so
+a single forward has to capture the state at the boundary itself (open, below).
+
+**Shipped: `patch_exllamav3_hist_stash.py`** (`EXL3_HIST_STASH=1`, image `:latest`, rollback
+`:pre-histstash`). After a verify round the GatedDeltaNet/PLE rollback history holds the state
+after every verified row; when the kept rows cross a page boundary, that state is copied out
+(before the round's rewind, which can overwrite the live conv window) and stashed under the
+page's hash, checked against its tokens. Per job only the latest such checkpoint is kept (plus
+the 2,048-token grid), and rounds are no longer cut short at grid boundaries.
+`tools/hist_stash_test.py`: at every capture, the engine's own rewind + stash compared bit for
+bit with the copy: 296 checks (GatedDeltaNet and PLE layers), 0 mismatches. Follow-ups (10.5k
+prompt + 400-token answer + 350 new): resume at 10,752 instead of 10,496, TTFT 0.88 / 1.07 /
+1.09 s vs 1.08 / 1.25 / 1.29 s; greedy follow-ups diverge from a cold full prefill at the same
+token with and without the patch (47 / 2 / 57). API: one session 54.6 tok/s [49.6–59.2], three
+66.9, edit / rewrite turns 104.6 / 132.0, `api_bench` unchanged, `three_sessions.py` memory
++126 MiB (one checkpoint) on a fresh server.
+
+Memory note: the gates above ran after other tests on the same server once, and showed 5.8
+GiB more; that is the recurrent cache filling towards `sysmem_recurrent_cache` (8 GiB), which
+happens with or without the patch. The ~80 GiB figures here are fresh-server numbers.
+
+Open: a single prefill forward for the partial last page (~0.15–0.3 s per follow-up), which
+needs the GatedDeltaNet chunk state at the page boundary from inside the forward (FLA keeps
+per-64-token chunk states) and the conv/PLE windows from the inputs; the rows' outputs may not
+be bit-identical to the two-forward split (different MoE/attention batch shapes), so it needs
+the greedy/needle gates and the owner's approval.
