@@ -105,13 +105,32 @@ NOTHINK = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
 import exllamav3.generator.draft_confidence as _dc
 REAL_PATH = "exllamav3/generator/draft_confidence.py"
 REAL = open(_dc.__file__).read()
-TOOLS2 = TOOLS.replace('{"type": "function", "function": {"name": "bash"',
-    '{"type": "function", "function": {"name": "write", "description": "Write a file, replacing its whole content.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}}\n{"type": "function", "function": {"name": "bash"')
+# edit / rewrite: rendered with the model's own chat template (tool calls as
+# <function=...><parameter=...> blocks with raw multi-line values, as TabbyAPI serves them)
+import json as _json, jinja2 as _jinja2
+def _raise(m): raise RuntimeError(m)
+_env = _jinja2.Environment(trim_blocks=True, lstrip_blocks=True)
+_env.globals["raise_exception"] = _raise
+_env.filters["tojson"] = lambda x, indent=None, **k: _json.dumps(x, ensure_ascii=False, indent=indent)
+_TPL = _env.from_string(open(os.path.join(MODEL, "chat_template.jinja")).read())
+def _fn(name, desc, **props):
+    return {"type": "function", "function": {"name": name, "description": desc, "parameters": {
+        "type": "object", "properties": {k: {"type": "string", "description": v} for k, v in props.items()},
+        "required": list(props)}}}
+PI_TOOLS = [
+    _fn("read", "Read the contents of a file.", path="Path to the file"),
+    _fn("edit", "Edit a file by replacing exact text. oldText must match the file exactly, including whitespace.",
+        path="Path to the file", oldText="Exact text to replace", newText="Replacement text"),
+    _fn("write", "Write a file, replacing its whole content.", path="Path to the file", content="New file content"),
+    _fn("bash", "Run a shell command.", command="The command"),
+]
 def _agent(task):
-    return ("<|im_start|>system\nYou are a coding agent working in the user's repository.\n\n" + TOOLS2 + "<|im_end|>\n"
-            "<|im_start|>user\n" + task + "<|im_end|>\n"
-            "<|im_start|>assistant\n<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\": \"" + REAL_PATH + "\"}}\n</tool_call><|im_end|>\n"
-            "<|im_start|>user\n<tool_response>\n" + REAL + "</tool_response><|im_end|>\n" + NOTHINK)
+    msgs = [{"role": "system", "content": "You are a coding agent working in the user's repository."},
+            {"role": "user", "content": task},
+            {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "read", "arguments": {"path": REAL_PATH}}}]},
+            {"role": "tool", "content": REAL}]
+    return _TPL.render(messages=msgs, tools=PI_TOOLS, add_generation_prompt=True, enable_thinking=False)
+
 PROMPTS = {
     "code": "<|im_start|>user\nWrite a Python function that parses an nginx access log line into a dict with fields ip, timestamp, method, path, status, bytes. Include a docstring, type hints, and a short usage example.<|im_end|>\n" + NOTHINK,
     "prose": "<|im_start|>user\nWrite a vivid 350-word short story about a lighthouse keeper on a remote island in Alaska who discovers something unexpected washed ashore after a storm.<|im_end|>\n" + NOTHINK,
@@ -140,19 +159,37 @@ model.load(progressbar=False, max_chunk_size=8192, max_batch_size=4)
 ids = {k: tok.encode(v, add_bos=False, encode_special_tokens=True) for k, v in PROMPTS.items()}
 
 IM_END = tok.single_id("<|im_end|>")
+DUMP = os.environ.get("DUMP", "")
+ROUNDSTAT = os.environ.get("ROUNDSTAT", "0") == "1"
+roundstat = collections.defaultdict(list); last_draft = []
+def _track(kind, fn):
+    def f(*a, **k):
+        d = fn(*a, **k)
+        if d is not None: last_draft.append((kind, d.shape[-1]))
+        return d
+    return f
+run_dump = []
 def run(gen, w, seed):
+    run.dump = run_dump
     torch.manual_seed(seed)
     job = Job(input_ids=ids[w], max_new_tokens=NTOK_LONG if w in LONG else NTOK,
               stop_conditions=[IM_END] if w in LONG else [],
               sampler=ComboSampler(temperature=1.0, top_k=20, top_p=0.95))
     gen.enqueue(job); t0 = None
     while gen.num_remaining_jobs():
+        ta = time.perf_counter(); acc0 = job.accepted_draft_tokens; last_draft.clear()
         for r in gen.iterate():
             if r.get("error"): raise RuntimeError(r["error"])
             if r.get("stage") == "streaming" and t0 is None: t0 = time.perf_counter()
+        if ROUNDSTAT and t0 is not None and last_draft:
+            kind, width = last_draft[-1]
+            roundstat[(w, kind, width)].append((time.perf_counter() - ta, job.accepted_draft_tokens - acc0))
     dt = time.perf_counter() - t0
     tot = job.accepted_draft_tokens + job.rejected_draft_tokens
     run.ntok = job.new_tokens
+    if DUMP:
+        seq = job.sequences[0].sequence_ids.torch().view(-1).tolist()
+        run.dump.append({"w": w, "seed": seed, "pld": getattr(G, "_PLD", False), "prompt_len": len(ids[w][0]), "ids": seq})
     return (job.new_tokens - 1) / dt, 100 * job.accepted_draft_tokens / max(tot, 1)
 
 res = collections.defaultdict(list)
@@ -161,6 +198,10 @@ for ndt in NDTS:
     gen = Generator(model=model, cache=cache, tokenizer=tok, draft_model=dm, draft_cache=dcache,
                     max_batch_size=4, max_chunk_size=8192, num_draft_tokens=ndt,
                     dynamic_draft_tokens=True, draft_confidence=CONFS[0])
+    if ROUNDSTAT:
+        if hasattr(gen, "_pld_round_drafts"): gen._pld_round_drafts = _track("pld", gen._pld_round_drafts)
+        _mtp = gen.iterate_draftmodel_mtp_gen
+        gen.iterate_draftmodel_mtp_gen = lambda *a, **k: (lambda d: d if d is None or last_draft else (last_draft.append(("mtp", d.shape[-1])) or d))(_mtp(*a, **k))
     cals = {(c, pl): DraftConfidenceCalibrator(c) for c in CONFS for pl in PLDS}
     for c in CONFS:  # warm-up: this cache shape, and each calibrator
         for pl in PLDS:
@@ -188,4 +229,11 @@ for w in WORKLOADS:
             print(f"SUMMARY {w:<7} ndt={ndt} pld={pl} " + "  ".join(
                 f"c{c}: {fmt([t for t, _ in res[(ndt, c, pl, w)]])} {statistics.median([a for _, a in res[(ndt, c, pl, w)]]):3.0f}%"
                 for c in CONFS), flush=True)
+if ROUNDSTAT:
+    print("ROUND workload kind drafts: rounds, median ms, mean accepted drafts")
+    for (w, kind, width), v in sorted(roundstat.items()):
+        print(f"ROUND {w:<7} {kind} {width:2d}: {len(v):5d} {1000 * statistics.median(t for t, _ in v):6.1f} ms "
+              f"{sum(a for _, a in v) / len(v):5.2f}", flush=True)
+if DUMP:
+    _json.dump(run_dump, open(DUMP, "w"))
 print("DONE", flush=True)
