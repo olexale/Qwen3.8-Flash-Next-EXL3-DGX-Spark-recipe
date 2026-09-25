@@ -94,6 +94,12 @@ RUN f=/app/backends/exllamav3/model.py \
  && sed -i 's/^                dynamic_draft_tokens=self.dynamic_draft,$/&\n                draft_confidence=float(__import__("os").environ.get("EXL3_DRAFT_CONFIDENCE", "0.6")),/' "$f" \
  && grep -q 'EXL3_DRAFT_CONFIDENCE' "$f"
 
+# Follow-up turns tokenize only the part of the prompt after the shared
+# conversation prefix (~0.16 s saved per turn at 115k tokens; token ids
+# identical). TABBY_ENCODE_CACHE=0 turns it off.
+COPY patch_tabbyapi_encode_cache.py /tmp/
+RUN python3 /tmp/patch_tabbyapi_encode_cache.py /app && rm /tmp/patch_tabbyapi_encode_cache.py
+
 # Recurrent-state checkpoints stay on the device instead of blocking copies to
 # pageable host memory; see the script. Fails the build if an anchor moved.
 COPY patch_exllamav3_checkpoints.py /tmp/
@@ -137,7 +143,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_DRAFT_CONFIDENCE=0.6 \
     EXL3_MOE_FUSED_UNIFORM=1 \
     EXL3_QSA_STAGE=1 \
-    EXL3_GDN_NOCOPY=1
+    EXL3_GDN_NOCOPY=1 \
+    TABBY_ENCODE_CACHE=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \

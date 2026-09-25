@@ -124,6 +124,7 @@ passes them to the container.
 | `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
 | `EXL3_QSA_STAGE` | `1` | sparse attention in prefill dequantizes the 8-bit K/V once per layer (`patch_exllamav3_qsa_stage.py`, bit-identical); `0` = dequantize per gathered tile, ~8% slower long prompts |
 | `EXL3_GDN_NOCOPY` | `1` | GatedDeltaNet prefill without four full-tensor copies (`patch_exllamav3_gdn_nocopy.py`, bit-identical); `0` = the fork's copies, ~1–2% slower long prompts |
+| `TABBY_ENCODE_CACHE` | `1` | follow-up turns tokenize only what follows the shared conversation prefix (`patch_tabbyapi_encode_cache.py`, same token ids); `0` = tokenize the whole prompt each turn, `verify` = also check against it |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
 
