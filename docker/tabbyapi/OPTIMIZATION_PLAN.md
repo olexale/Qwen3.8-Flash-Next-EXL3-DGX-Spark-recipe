@@ -560,3 +560,21 @@ Tried on the same kernel, no gain on sm_121: vLLM 0.30.0's prefill launch
 (1 warp) 0.59x, `BLOCK_N=64` 0.87x (also not bit-identical), 2 warps / 3 stages
 1.12x but not bit-identical; 8 warps 0.39x. Rollback image:
 `qwen38-exl3-tabby:pre-qsastage`.
+
+### GatedDeltaNet prefill without copies (2026-09-25, bit-identical)
+
+`patch_exllamav3_gdn_nocopy.py`: the chunked prefill path copied the same data
+four times (fp16 → bf16 transpose for the conv, FLA's `input_guard` on the q/k/v
+views, `torch.cat` of one output); ~0.29 s of kernel time per 8k chunk. The
+conv kernel now reads the fp16 projection in place (bf16 rounding on load) and
+writes q/k/v contiguous. `prefill_parity.py TOGGLE=EXL3_GDN_NOCOPY`: logits of 4
+new tokens bit-identical at 200 / 3k / 9k / 20k. Engine benchmark, alternating
+off/on twice in one window (chunk 8192): 3k 3.04/3.04 vs 3.01/3.06 s, 20k
+16.37/16.23 vs 16.13/16.03 s, 40k 30.51/31.94 vs 30.19/30.53 s: ~1–2%, less than
+the profile's 4% (the copies partly overlap). API after deploying: cold 24.5k
+19.3 s, follow-up 25k 1.51 s, cold 573 tokens 1.12 s, decode 52.5 and 54.9 tok/s
+(two runs of 10), three sessions 53.2. Rollback: `:pre-gdnnocopy`.
+
+Note for engine A/Bs: an in-process off/on comparison where "off" always runs a
+new prompt size first overstates the gain (one-time kernel tuning lands on
+"off"); alternate whole runs instead.
