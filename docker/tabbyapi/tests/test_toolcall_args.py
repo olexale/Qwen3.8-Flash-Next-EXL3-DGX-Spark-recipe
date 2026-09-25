@@ -95,6 +95,7 @@ async def test_round_trip_through_the_chat_template():
                 {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function",
                  "function": {"name": call.function.name, "arguments": json.loads(call.function.arguments)}}]}]
         out = await tpl.render({"messages": msgs, "tools": TOOLS, "add_generation_prompt": False})
-        a = out.index("<tool_call>")
+        # the system prompt carries an example <tool_call>; take the one in the assistant turn
+        a = out.index("<tool_call>", out.rindex("<|im_start|>assistant"))
         got = out[a:out.index("</tool_call>", a) + len("</tool_call>")]
         assert got == raw, f"\nmodel wrote: {raw!r}\nrendered:    {got!r}"
