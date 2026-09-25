@@ -74,4 +74,57 @@ for m, f in patched: m.forward = f
 print(f"RESULT synced cold {TOKENS}: {total:.2f}s, modules {sum(acc.values()):.2f}s, other {total - sum(acc.values()):.2f}s")
 for k, v in acc.most_common(25):
     print(f"RESULT   {k:<40} {v:6.3f}s  calls={cnt[k]}", flush=True)
-print("DONE", flush=True)
+
+# KERNELS=N: one more cold prefill (unsynced) under torch.profiler; every GPU kernel is
+# attributed to its innermost module (class name, TransformerBlock = the block's own code),
+# then the top N kernels of the top scopes
+KERNELS = int(os.environ.get("KERNELS", "0"))
+if KERNELS:
+    from torch.profiler import profile, ProfilerActivity, record_function
+    from torch.autograd import DeviceType
+    for m in allm:
+        name = ("MTP:" if id(m) in dm_mods else "") + type(m).__name__
+        f = m.forward
+        def g2(*a, _f=f, _n=name, **k):
+            with record_function("MOD::" + _n):
+                return _f(*a, **k)
+        m.forward = g2
+    ids = build(TOKENS, 5); torch.cuda.synchronize()
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+        t = time.perf_counter(); run(ids); wall = time.perf_counter() - t
+    for m, f in patched: m.forward = f
+    def scope(e):
+        p = e.cpu_parent
+        while p is not None:
+            if p.name.startswith("MOD::"): return p.name[5:]
+            p = p.cpu_parent
+        return "(untagged)"
+    def short(n):
+        n = n.replace("void ", "").replace("at::native::", "").replace("(anonymous namespace)::", "")
+        return n.split("(")[0][:90]
+    sgpu = collections.Counter(); kern = collections.defaultdict(collections.Counter)
+    kcnt = collections.defaultdict(collections.Counter)
+    # GPU-side spans of the MOD:: ranges nest like the modules; each kernel goes to the
+    # innermost span that contains its start (sweep with a stack)
+    spans, kernels = [], []
+    for e in prof.events():
+        if e.device_type != DeviceType.CUDA: continue
+        tr = e.time_range
+        (spans if e.name.startswith("MOD::") else kernels).append((tr.start, tr.end, e.name))
+    spans.sort(key=lambda x: (x[0], -x[1])); kernels.sort()
+    stack, i = [], 0
+    for ks, ke, kn in kernels:
+        while i < len(spans) and spans[i][0] <= ks:
+            while stack and stack[-1][1] <= spans[i][0]: stack.pop()
+            stack.append(spans[i]); i += 1
+        while stack and stack[-1][1] <= ks: stack.pop()
+        s_ = stack[-1][2][5:] if stack else "(untagged)"
+        sgpu[s_] += ke - ks; kern[s_][short(kn)] += ke - ks; kcnt[s_][short(kn)] += 1
+    print(f"KERNEL profiled cold {TOKENS}: wall {wall:.2f}s, kernels {sum(sgpu.values())/1e6:.2f}s")
+    for s, v in sgpu.most_common(12):
+        print(f"KERNEL {s:<32} {v/1e6:6.3f}s")
+        for k, d in kern[s].most_common(KERNELS):
+            print(f"KERNEL     {d/1e6:6.3f}s n={kcnt[s][k]:<6} {k}")
+    print("DONE", flush=True)
+else:
+    print("DONE", flush=True)
