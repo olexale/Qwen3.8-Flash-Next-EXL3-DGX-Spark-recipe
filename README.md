@@ -761,7 +761,7 @@ days twice.
   head's first token agrees) speeds up edit tool calls and file rewrites by
   30–40% with code and prose unchanged; see
   [docker/tabbyapi/PLAN_B_DECODE.md](docker/tabbyapi/PLAN_B_DECODE.md#findings-2026-09-25)
-  (`EXL3_PLD`, off by default).
+  (`EXL3_PLD`, on in the TabbyAPI image).
 
 - **A dequant-once MoE kernel — premise withdrawn, size unmeasured.** The fused
   expert kernel costs ~linearly in verify rows (0.127 ms at m=1 to 0.704 ms at

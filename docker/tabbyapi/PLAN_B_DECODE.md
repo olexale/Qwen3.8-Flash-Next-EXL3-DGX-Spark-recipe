@@ -456,3 +456,29 @@ Decisions for the owner:
 B2 is closed: every item is below ~2% (B1). The remaining one-session code number is
 bounded by the verify cost per row (weight streaming) and MTP acceptance; nothing left in
 the list is sized above ~2%.
+
+### Enabled (2026-09-25, approved): cap 11, `max_batch_size: 3`
+
+The owner approved decision 1 and chose cap 11 with `max_batch_size: 3`. Image
+`qwen38-exl3-tabby:pld11` is `:latest` (rollback `:pre-pld`, or `EXL3_PLD=0
+EXL3_MOE_BSZN_MAX=8` plus `max_batch_size: 4` for the old behaviour on the new image).
+Defaults now: `EXL3_PLD=1`, `EXL3_PLD_MAX=11`, `EXL3_MOE_BSZN_MAX=16`; `config.yml`
+`max_batch_size: 3`. Gates through the API:
+
+| | features off (`:pldgate`) | enabled (`:pld11`) |
+|---|---:|---:|
+| edit turn (`api_edit.py`, 5 reps) | 82.3 [80.5–83.7] | **102.5** [96.8–104.0] |
+| rewrite turn | 85.2 [84.6–85.8] | **131.9** [128.2–132.7] |
+| one session (`concurrent_decode.py N=1 REPS=10`) | 54.5 [51.1–56.9] | 53.7 [48.5–60.3] |
+| three sessions (`N=3 REPS=5`) | 53.7 [51.9–54.7] | **61.5** [56.7–65.2] |
+| `api_bench.py`: cold 24.5k / follow-up / decode | 19.3 s / 1.51 s / 54 | 18.9 s / 1.42 s / 54.3 |
+| `three_sessions.py`: follow-ups at ~117k | 1.5 s | 1.40 / 1.83 / 1.53 s |
+| memory, `three_sessions.py` | 78.6 GiB | **81.5 GiB** |
+| 128k needle (`ctxfill.py`, `MBS=3`), two seeds | | HIT, HIT (decode 74–76 tok/s) |
+
+Memory is ~1.5 GiB above the estimate (78.6 + 1.4): about 1 GiB goes with the 16-row
+path (the same excess showed at cap 15: +5.5 measured vs +4.5 estimated), most likely the
+per-shape CUDA graphs and buffers of 9–16-row verifies. It is ~2% over the ~80 GiB
+budget; cap 9 would save ~0.7 GiB more at some cost on rewrites (111 vs 119 tok/s engine).
+`ctxfill.py` needs `MBS=3` now (its default 16 batch slots x 12 history steps does not fit
+next to the model).

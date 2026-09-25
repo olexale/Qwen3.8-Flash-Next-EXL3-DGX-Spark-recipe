@@ -124,28 +124,28 @@ passes them to the container.
 | `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
 | `EXL3_QSA_STAGE` | `1` | sparse attention in prefill dequantizes the 8-bit K/V once per layer (`patch_exllamav3_qsa_stage.py`, bit-identical); `0` = dequantize per gathered tile, ~8% slower long prompts |
 | `EXL3_GDN_NOCOPY` | `1` | GatedDeltaNet prefill without four full-tensor copies (`patch_exllamav3_gdn_nocopy.py`, bit-identical); `0` = the fork's copies, ~1–2% slower long prompts |
-| `EXL3_PLD` | `0` | prompt-lookup drafting alongside MTP (`patch_exllamav3_pld.py`): when the output repeats text in the context (edit tool calls, file rewrites), draft the continuation of the match instead of running the MTP head. Outputs unchanged (drafts are verified); edit tool calls +16% (+32% with `EXL3_MOE_BSZN_MAX=16`), whole-file rewrites +23% (+43%). Off until approved |
-| `EXL3_PLD_START` / `EXL3_PLD_MAX` / `EXL3_PLD_MIN_MATCH` | `7` / `15` / `8` | lookup draft length (first, and after a fully accepted lookup round), and the shortest match used. The cap is also limited by the MoE decode row limit minus one; `EXL3_PLD=1` keeps `EXL3_PLD_MAX` rows of recurrent-state history per batch slot (~113 MB each above the 5 MTP needs) |
-| `EXL3_MOE_BSZN_MAX` | `8` | largest verify batch (rows) the fused decode MoE kernels take (`patch_exllamav3_bszn16.py`, up to 16). At 8 the image is bit-identical to before; 16 keeps 9–16-row verifies (long lookup drafts, two sessions drafting) off the ~45 ms slower prefill kernel |
+| `EXL3_PLD` | `1` | prompt-lookup drafting alongside MTP (`patch_exllamav3_pld.py`): when the output repeats text in the context (edit tool calls, file rewrites), draft the continuation of the match instead of the rest of the MTP chain (if the MTP head's first token agrees, `EXL3_PLD_GATE=1`). Outputs unchanged (drafts are verified); through the API edit tool calls 82 → 103 tok/s, whole-file rewrites 85 → 132. `0` turns it off |
+| `EXL3_PLD_START` / `EXL3_PLD_MAX` / `EXL3_PLD_MIN_MATCH` | `7` / `11` / `8` | lookup draft length (first, and after a fully accepted lookup round), and the shortest match used. The cap is also limited by the MoE decode row limit minus one; `EXL3_PLD=1` keeps `EXL3_PLD_MAX` rows of recurrent-state history per batch slot (~113 MB each above the 5 MTP needs) |
+| `EXL3_MOE_BSZN_MAX` | `16` | largest verify batch (rows) the fused decode MoE kernels take (`patch_exllamav3_bszn16.py`). 16 keeps 9–16-row verifies (long lookup drafts, two or three sessions drafting) off the ~45 ms slower prefill kernel: three sessions 54 → 62 tok/s together. `8` = the old limit, bit-identical to before |
 | `TABBY_ENCODE_CACHE` | `1` | follow-up turns tokenize only what follows the shared conversation prefix (`patch_tabbyapi_encode_cache.py`, same token ids); `0` = tokenize the whole prompt each turn, `verify` = also check against it |
 
 What each one is worth is in the main [README](../../README.md#the-native-engine-tuned-for-gb10).
 
 ## What to expect
 
-Measured 2026-09-25 through the API (image `:pldgate`, new features off):
+Measured 2026-09-25 through the API (image `:pld11`):
 
 | | |
 |---|---|
-| Memory in use while serving | about 72 GiB of device memory plus 4 GiB host with three ~115k-token conversations cached; system total ~79.5 GiB |
+| Memory in use while serving | system total ~81.5 GiB with three ~117k-token conversations cached (78.6 before prompt-lookup drafting's rollback history and the 16-row decode path) |
 | Prefill, cold prompt | about 1,280–1,330 tok/s (24k-token prompt: 19 s; 115k: 87 s) |
 | Cold short prompt, ~600 tokens | about 1.1 s to first token |
 | Follow-up turn, cached history + ~850 new tokens | about 1.5 s on a 25k conversation, 1.6–1.9 s on 115k |
 | Conversations kept in the prefix cache | three at full length (262,144 tokens each) |
-| Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–56), one session |
-| Decode, three sessions at once | about 54 tok/s together, ~18–20 each |
+| Decode, 400-token code answer, the model's default sampling | about 54 tok/s (48–60), one session |
+| Decode, three sessions at once | about 62 tok/s together, ~20 each |
 | First request after start | under 2 s; only the very first start after a new image pays ~20 s of kernel tuning |
-| pi-style edit tool call / whole-file rewrite (`tools/api_edit.py`) | about 82 / 85 tok/s; 101 / 140 with `EXL3_PLD=1 EXL3_MOE_BSZN_MAX=16` (not yet on: see below) |
+| pi-style edit tool call / whole-file rewrite (`tools/api_edit.py`) | about 103 / 132 tok/s (82 / 85 without prompt-lookup drafting) |
 
 What keeps it fast, so keep these when you edit:
 
@@ -171,12 +171,13 @@ What keeps it fast, so keep these when you edit:
 - The `qwen38-tabby-cache` volume that `start_tabby.sh` mounts (kernel tuning
   results; without it every start re-tunes for ~20 s).
 
-Not on yet, awaiting approval: prompt-lookup drafting (`EXL3_PLD=1`) and the 16-row
-decode MoE (`EXL3_MOE_BSZN_MAX=16`). Together, edit tool calls +22% and file rewrites
-+64% through the API, two or three sessions at once +16–18%, one session unchanged. At
-the default cap of 15 lookup tokens the extra rollback history takes 84 GiB in the
-three-session test (78.6 without); `EXL3_PLD_MAX=11` with `max_batch_size: 3`, or
-`EXL3_PLD_MAX=7`, stays near 80. Details: [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25).
+- `patch_exllamav3_pld.py` + `patch_exllamav3_bszn16.py` (`EXL3_PLD=1`,
+  `EXL3_PLD_MAX=11`, `EXL3_MOE_BSZN_MAX=16`) and `max_batch_size: 3` in
+  `config.yml`: edit tool calls and file rewrites decode 25–55% faster, three
+  sessions 15% faster. Each batch slot keeps ~113 MB of GatedDeltaNet rollback
+  history per drafted token, so the cap and the batch size set the memory: cap 15
+  at batch 4 measured 84 GiB. Details:
+  [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25).
 
 The draft settings (5 tokens, confidence 0.6) were re-checked on sampled code,
 prose and tool-call output: no other combination was clearly faster.

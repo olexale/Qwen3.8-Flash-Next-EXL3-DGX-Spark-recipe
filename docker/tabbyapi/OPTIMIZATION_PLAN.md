@@ -615,8 +615,10 @@ Plan and all numbers: [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25). 
   edit turns 82 → 101 tok/s, whole-file rewrites 85 → 140, one session unchanged, two
   sessions 55 → 64, three 54 → 63; memory 78.6 → 84.1 GiB at cap 15 (the GatedDeltaNet
   rollback history), so cap 11 with `max_batch_size: 3` or cap 7 is the fit for ~80 GiB.
-  Both off until the owner approves; the keep/remove decision waits for a recorded pi
-  session.
+  Approved and enabled the same day with cap 11 and `max_batch_size: 3` (image
+  `:pld11`): edit turns 103 tok/s, rewrites 132, three sessions 61.5, one session 53.7
+  (unchanged within noise), memory 81.5 GiB. The keep/remove check on a recorded pi
+  session is still open.
 - **Harness fixes:** `draft_sweep.py`, `greedy_ab.py` encoded prompts without special
   tokens (chat markup as plain text; the T2 table above ran that way, its relative result
   stands). With the fix, greedy decode is bit-reproducible run to run. The old `tool`
