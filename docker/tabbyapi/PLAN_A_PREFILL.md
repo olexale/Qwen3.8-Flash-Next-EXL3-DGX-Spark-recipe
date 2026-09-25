@@ -417,6 +417,26 @@ selected tokens), so its share is the same at 8k and 32k.
    #54517 PLE kernels): here `mul_sigmoid` is 0.015 s and the PLE layer 0.04 s
    per 8k; < 1% together.
 
+### Status after this round (2026-09-25)
+
+| | Before (2026-09-24) | Now | Target |
+|---|---:|---:|---:|
+| Cold long prompt, 115k, API | 1,228–1,233 tok/s | 1,318–1,331 tok/s | ≥ 1,800 |
+| Cold 20k, engine bench, chunk 8192 | 1,184 tok/s (16.9 s) | 1,281 tok/s (15.6 s) | ≥ 1,700 |
+| Cold ~600 tokens, API | 1.11 s | 1.12 s | ≤ 0.9 s |
+| Follow-up, 25k + ~850 new, API | 1.52 s | 1.46–1.51 s | ≤ 1.2 s |
+| Decode, one session | 54.0 tok/s | 54.4 / 54.9 (two runs) | not lower |
+
+Shipped, all bit-identical: `patch_exllamav3_qsa_stage.py` (+8%),
+`patch_exllamav3_gdn_nocopy.py` (+1–2%), `patch_tabbyapi_encode_cache.py`
+(follow-ups, tokenization only). Sized and not worth doing (each < ~2% or not
+bit-identical): QSA launch retunes, padded-index skipping, indexer and PLE/QSA-gate
+fusions, the v1.4.7 MoE kernel and vLLM's MoE split (A3e, measured slower before),
+mixer GEMM padding, chunk 16384 (memory is at 78–79.5 GiB of the ~80 budget).
+Left: the MoE (≥ 42% of prefill, running at ~13 TFLOPS in the fused tier against
+~58 TFLOPS for cuBLAS here) needs a new kernel (A3h), and the HC apply + next-norm
+fusion across blocks (~1–2%, CUDA). Both wait for the owner.
+
 ## Gates for every change
 
 1. **Parity on real inputs**: capture the module's real inputs during a

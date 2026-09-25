@@ -578,3 +578,23 @@ the profile's 4% (the copies partly overlap). API after deploying: cold 24.5k
 Note for engine A/Bs: an in-process off/on comparison where "off" always runs a
 new prompt size first overstates the gain (one-time kernel tuning lands on
 "off"); alternate whole runs instead.
+
+### Time to first token outside the engine (2026-09-25, A3g)
+
+Client TTFT minus TabbyAPI's "first token" (which starts at job enqueue): ~0.18 s
+on a 90-token prompt and 0.27–0.31 s on 115k follow-ups. Where it goes:
+
+- ~0.18 s, any prompt: the model's first tokens are reasoning markup the
+  reasoning parser consumes, so the first *visible* delta arrives 3–4 decode
+  steps (~45 ms each) after the server's first token (SSE trace). That is model
+  output, not overhead; a client measuring any chunk would see it earlier.
+- Chat template rendering: ~1 ms at 115k tokens. Not a cost.
+- Tokenizing the whole conversation every turn: ~0.16 s at 115k (0.03 s at
+  25k). **Shipped `patch_tabbyapi_encode_cache.py`** (`TABBY_ENCODE_CACHE=1`):
+  reuse the ids of a shared prefix up to its last `<|im_start|>`, encode only
+  the rest. `tools/encode_cache_test.py`: 96 growing conversations (20k–200k
+  characters, code/CJK/emoji/markup-like text), 0 mismatches, tokenization
+  4.03 → 0.75 s. Through the API in `verify` mode: 0 mismatches. The ~0.13 s it
+  saves at 115k is within run-to-run noise of the follow-up TTFT (client mean
+  1.68 s over six follow-ups vs 1.76 s before; server 1.14–1.63 s). Memory 78.1
+  GiB system-wide. Rollback: `:pre-enccache`.
