@@ -40,7 +40,7 @@ gen = Generator(model=model, cache=cache, tokenizer=tok, draft_model=dm, draft_c
                 max_batch_size=4, max_chunk_size=8192, num_draft_tokens=5,
                 dynamic_draft_tokens=True, draft_confidence=0.6)
 def run(p, n):
-    ids = tok.encode(f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", add_bos=False)
+    ids = tok.encode(f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", add_bos=False, encode_special_tokens=True)
     job = Job(input_ids=ids, max_new_tokens=n, sampler=GreedySampler(), stop_conditions=[])
     gen.enqueue(job); out = []; t0 = None
     while gen.num_remaining_jobs():

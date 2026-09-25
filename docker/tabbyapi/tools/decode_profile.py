@@ -57,7 +57,7 @@ cache = Cache(model, max_num_tokens=16384, max_batch_size=4, max_history=NDT, **
 dcache = Cache(dm, max_num_tokens=16384, max_batch_size=4, max_history=NDT, **qkw)
 dm.load(progressbar=False)
 model.load(progressbar=False, max_chunk_size=8192, max_batch_size=4)
-ids = tok.encode(PROMPTS[WORKLOAD], add_bos=False)
+ids = tok.encode(PROMPTS[WORKLOAD], add_bos=False, encode_special_tokens=True)
 gen = Generator(model=model, cache=cache, tokenizer=tok, draft_model=dm, draft_cache=dcache,
                 max_batch_size=4, max_chunk_size=8192, num_draft_tokens=NDT,
                 dynamic_draft_tokens=True, draft_confidence=CONF)
