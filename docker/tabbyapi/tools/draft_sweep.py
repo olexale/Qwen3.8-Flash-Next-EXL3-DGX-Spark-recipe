@@ -22,6 +22,10 @@ NTOK_LONG tokens) and report tok/s over the tokens actually generated.
 PLDS=0,1 runs every cell with prompt-lookup drafting off and on (the generator module's flag,
 toggled in process; start the container with -e EXL3_PLD=1 so the cache gets the longer
 rollback history for both). EXL3_PLD_MAX / _MIN_MATCH / _NGRAM as in the patch.
+VARIANTS="mtp:PLD=0;pld7:PLD=1,PLD_MAX=7;pld15:PLD=1,PLD_MAX=15,BSZN=16" instead names
+in-process variants (module globals: PLD, PLD_MAX, MIN_MATCH, BSZN = the fused decode MoE's
+row limit from patch_exllamav3_bszn16.py). Load with EXL3_PLD_MAX / EXL3_MOE_BSZN_MAX at the
+largest value used, so the buffers are sized for it.
 
 Env: NDTS=3,4,5,6,7  CONFS=0.4,0.5,0.6,0.7,0.8  REPS=10  NTOK=320  NTOK_LONG=1200
      WORKLOADS=code,prose,tool  PLDS=0
@@ -41,6 +45,17 @@ NTOK = int(os.environ.get("NTOK", "320"))
 WORKLOADS = os.environ.get("WORKLOADS", "code,prose,tool").split(",")
 NTOK_LONG = int(os.environ.get("NTOK_LONG", "1200"))
 PLDS = [int(x) for x in os.environ.get("PLDS", "0").split(",")]
+VARIANTS = [(v.split(":")[0], dict(kv.split("=") for kv in v.split(":")[1].split(",") if kv))
+            for v in os.environ.get("VARIANTS", "").split(";") if v] or [(str(p), {"PLD": p}) for p in PLDS]
+import exllamav3.modules.block_sparse_mlp as _bsm, exllamav3.modules.mlp as _mlpm
+def apply_variant(v):
+    for k, val in v.items():
+        if k == "PLD":
+            if hasattr(G, "_PLD"): G._PLD = val not in ("0", 0)
+        elif k == "PLD_MAX": G._PLD_MAX = int(val)
+        elif k == "MIN_MATCH": G._PLD_MIN_MATCH = int(val)
+        elif k == "BSZN": _bsm.MAX_BSZN = _mlpm.MAX_BSZN = int(val)
+        else: raise ValueError(k)
 import exllamav3.generator.generator as G
 print("CONFIG", f"NDTS={NDTS} CONFS={CONFS} REPS={REPS} NTOK={NTOK} WORKLOADS={WORKLOADS} PLDS={PLDS} "
       f"PLD_MAX={getattr(G, '_PLD_MAX', None)} MIN_MATCH={getattr(G, '_PLD_MIN_MATCH', None)} "
@@ -170,7 +185,7 @@ def _track(kind, fn):
     return f
 run_dump = []
 def run(gen, w, seed):
-    run.dump = run_dump
+    run.dump = run_dump; run.variant = getattr(run, "variant", "")
     torch.manual_seed(seed)
     job = Job(input_ids=ids[w], max_new_tokens=NTOK_LONG if w in LONG else NTOK,
               stop_conditions=[IM_END] if w in LONG else [],
@@ -183,13 +198,13 @@ def run(gen, w, seed):
             if r.get("stage") == "streaming" and t0 is None: t0 = time.perf_counter()
         if ROUNDSTAT and t0 is not None and last_draft:
             kind, width = last_draft[-1]
-            roundstat[(w, kind, width)].append((time.perf_counter() - ta, job.accepted_draft_tokens - acc0))
+            roundstat[(w, run.variant, kind, width)].append((time.perf_counter() - ta, job.accepted_draft_tokens - acc0))
     dt = time.perf_counter() - t0
     tot = job.accepted_draft_tokens + job.rejected_draft_tokens
     run.ntok = job.new_tokens
     if DUMP:
         seq = job.sequences[0].sequence_ids.torch().view(-1).tolist()
-        run.dump.append({"w": w, "seed": seed, "pld": getattr(G, "_PLD", False), "prompt_len": len(ids[w][0]), "ids": seq})
+        run.dump.append({"w": w, "seed": seed, "pld": getattr(G, "_PLD", False), "variant": run.variant, "prompt_len": len(ids[w][0]), "ids": seq})
     return (job.new_tokens - 1) / dt, 100 * job.accepted_draft_tokens / max(tot, 1)
 
 res = collections.defaultdict(list)
@@ -202,21 +217,21 @@ for ndt in NDTS:
         if hasattr(gen, "_pld_round_drafts"): gen._pld_round_drafts = _track("pld", gen._pld_round_drafts)
         _mtp = gen.iterate_draftmodel_mtp_gen
         gen.iterate_draftmodel_mtp_gen = lambda *a, **k: (lambda d: d if d is None or last_draft else (last_draft.append(("mtp", d.shape[-1])) or d))(_mtp(*a, **k))
-    cals = {(c, pl): DraftConfidenceCalibrator(c) for c in CONFS for pl in PLDS}
+    cals = {(c, pl): DraftConfidenceCalibrator(c) for c in CONFS for pl, _ in VARIANTS}
     for c in CONFS:  # warm-up: this cache shape, and each calibrator
-        for pl in PLDS:
-            if hasattr(G, "_PLD"): G._PLD = bool(pl)
+        for pl, var in VARIANTS:
+            apply_variant(var); run.variant = "warmup"
             gen.draft_calibrator = cals[(c, pl)]
             for w in WORKLOADS: run(gen, w, 0)
     for rep in range(REPS):
         for c in CONFS:
-            for pl in PLDS:
-                if hasattr(G, "_PLD"): G._PLD = bool(pl)
+            for pl, var in VARIANTS:
+                apply_variant(var); run.variant = pl
                 gen.draft_calibrator = cals[(c, pl)]
                 for w in WORKLOADS:
                     tps, acc = run(gen, w, 1000 + rep)
                     res[(ndt, c, pl, w)].append((tps, acc))
-                    print(f"SAMPLE ndt={ndt} conf={c} pld={pl} {w:<7} rep={rep} {tps:6.1f} tok/s accept {acc:4.0f}% "
+                    print(f"SAMPLE ndt={ndt} conf={c} v={pl:<6} {w:<7} rep={rep} {tps:6.1f} tok/s accept {acc:4.0f}% "
                           f"tokens {run.ntok}", flush=True)
     del gen
 
@@ -225,14 +240,14 @@ def fmt(v):
 print("SUMMARY decode tok/s median [range], acceptance % median")
 for w in WORKLOADS:
     for ndt in NDTS:
-        for pl in PLDS:
-            print(f"SUMMARY {w:<7} ndt={ndt} pld={pl} " + "  ".join(
+        for pl, _ in VARIANTS:
+            print(f"SUMMARY {w:<7} ndt={ndt} v={pl:<6} " + "  ".join(
                 f"c{c}: {fmt([t for t, _ in res[(ndt, c, pl, w)]])} {statistics.median([a for _, a in res[(ndt, c, pl, w)]]):3.0f}%"
                 for c in CONFS), flush=True)
 if ROUNDSTAT:
     print("ROUND workload kind drafts: rounds, median ms, mean accepted drafts")
-    for (w, kind, width), v in sorted(roundstat.items()):
-        print(f"ROUND {w:<7} {kind} {width:2d}: {len(v):5d} {1000 * statistics.median(t for t, _ in v):6.1f} ms "
+    for (w, vn, kind, width), v in sorted(roundstat.items()):
+        print(f"ROUND {w:<7} {vn:<6} {kind} {width:2d}: {len(v):5d} {1000 * statistics.median(t for t, _ in v):6.1f} ms "
               f"{sum(a for _, a in v) / len(v):5.2f}", flush=True)
 if DUMP:
     _json.dump(run_dump, open(DUMP, "w"))
