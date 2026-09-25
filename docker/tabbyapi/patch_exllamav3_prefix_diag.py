@@ -79,7 +79,7 @@ def _prefix_diag_alloc(job, seq, cached_pages, kv_only_pages):
         best = None
         for prev_ids, prev_p in _pd_ring:
             l = _pd_lcp(ids, prev_ids)
-            if best is None or l > best[0]:
+            if best is None or l >= best[0]:  # ties: the most recent
                 best = (l, prev_ids, prev_p)
         if best is not None and best[0] > 0:
             l, prev_ids, prev_p = best
