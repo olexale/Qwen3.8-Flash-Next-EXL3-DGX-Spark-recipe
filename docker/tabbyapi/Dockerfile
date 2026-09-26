@@ -111,6 +111,15 @@ RUN python3 /tmp/patch_tabbyapi_encode_cache.py /app && rm /tmp/patch_tabbyapi_e
 COPY patch_tabbyapi_toolcall_args.py /tmp/
 RUN python3 /tmp/patch_tabbyapi_toolcall_args.py /app && rm /tmp/patch_tabbyapi_toolcall_args.py
 
+# Quoted tool markers stay text: <tool_call> opens a call only when <function=
+# follows and it is outside a fenced code block, a stray </tool_call> is text,
+# requests without tools never enter tool mode, finish_reason "tool_calls" only
+# when a call parsed. Plus reasoning_effort high/max -> xhigh, minimal -> low
+# (the template 400s on them). TABBY_TOOL_MARKERS=0 / TABBY_EFFORT_ALIAS=0 turn
+# them off.
+COPY patch_tabbyapi_tool_markers.py /tmp/
+RUN python3 /tmp/patch_tabbyapi_tool_markers.py /app && rm /tmp/patch_tabbyapi_tool_markers.py
+
 # Recurrent-state checkpoints stay on the device instead of blocking copies to
 # pageable host memory; see the script. Fails the build if an anchor moved.
 COPY patch_exllamav3_checkpoints.py /tmp/
