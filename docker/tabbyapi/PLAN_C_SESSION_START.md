@@ -30,7 +30,7 @@ the measurements this plan builds on; do not repeat them.
   the numbers below were made. The prompts are still the owner's data: use lengths and timings
   only.
 - **What Plan C is worth in real use** (114 pi turns in 8 sessions, 2026-09-23..25, matched
-  to the TabbyAPI logs): waiting time was 23% TTFT and 77% decode. C2 saves ~8 s per session
+  to the TabbyAPI logs): waiting time was 23% TTFT and 77% decode. C2 saves up to ~8 s per session
   (turn 1 cold 4.5–4.6 s, turn 2 lost to checkpoints 4.7–6.3 s in both 09-25 sessions), about 3%
   of the total. C3 saves ~0.2 s per turn, about 1%. That is small, but it is low risk and
   within prefix-caching variation, so do it, and still run the gates. What Plan C cannot fix:
@@ -46,7 +46,7 @@ follow-up turn. Output must not change (see Constraints).
 
 | | Now (2026-09-25, image `:latest` = `:histstash`) | Target |
 |---|---:|---:|
-| Turn 1 of a pi session (~5.4k-token prompt: pi's system prompt + tools + the task) | 4.6 s (cold every session) | ≤ 1 s once pi's prefix is cached |
+| Turn 1 of a pi session (~5.4k-token prompt: pi's system prompt + tools + the task) | 4.6 s (cold every session) | ≤ 1 s from the third session with the same prefix (C2b), if C1 shows the prefix repeats |
 | Turn 2 of a pi session (~8.1k tokens) | 6.3 s (prefills all 8.1k again) | ≤ 3 s |
 | Follow-up turn, ~350 new tokens after an answer (engine, `tools/followup_profile.py`) | 0.9–1.2 s | ≤ 0.8 s |
 | Everything else (decode, three sessions, memory, prefill of long prompts) | see `PLAN_B_DECODE.md` "Enabled" | not worse |
@@ -158,36 +158,65 @@ deliberate and fixed-size, a checkpoint just before the first `<|im_start|>user`
 it. If the diff is at the system prompt's tail, anchor C2 earlier. Ask the owner before
 logging any actual text, even decoded tokens.
 
-### C2. A checkpoint where the conversation starts (the ~8 s)
+**Second question for C1 (added 2026-09-26): does pi's prefix repeat across sessions?** Plan C
+first assumed pi's system prompt + tools (~5.1k tokens) are identical in every session. No log
+shows it: the only cross-session comparison (09-25 13:59) was against an unrelated request
+(the diagnostic keeps 16 sequences). pi likely includes the working directory or project files,
+so sessions in different projects may diverge early. Keep a longer, bounded history for
+`EXL3_PREFIX_DIAG=2` (the page-hash chain of each first turn's prompt, never text), and report
+for each new session's turn 1 the longest prefix shared with any earlier session's turn 1,
+same project vs different project (the owner can tell which sessions were which). This sizes
+C2b: if turn 1 prefixes don't repeat beyond a few hundred tokens, C2b is dropped.
 
-During prefill, also split at the page boundary at or before the first `<|im_start|>user` token
-(the end of pi's system prompt + tools, identical across sessions), when no recurrent
-checkpoint covers that page yet. Same mechanism as the fork's last-page split: one extra
-forward (~0.2 s), paid only when that checkpoint is not cached (first pi session after a
-restart, or after LRU eviction). Then:
+### C2. Checkpoints where prompts actually diverge (turn 2, and turn 1 of repeat sessions)
 
-- turn 1 of every later session resumes at ~5,120 (the shared prefix) instead of 0: 4.6 s →
-  ~0.5 s (the ~280 remaining tokens plus one forward);
-- turn 2 resumes at ~5,120 instead of 0: 6.3 s → ~2.5 s.
+**Several harnesses share this server** (pi, Paseo, other agents, a chat now and then) and run
+in parallel (`max_batch_size: 3`). Restoring a checkpoint is safe for any mix: pages are keyed by
+a hash that chains in the previous page's hash (`generator/pagetable.py` `prev_hash`), so a
+checkpoint is only found by a prompt identical up to that page. What can go wrong is
+performance: checkpoints nobody reuses (harnesses that put the date, working directory or git
+status in the system prompt make a new prefix every session), extra ~0.2 s prefill forwards
+that also stall the other sessions' decode, and eviction pressure on the shared 8 GiB
+recurrent cache (~70 checkpoints of ~112 MiB). Evicting a live session's latest checkpoint
+costs that session a full re-prefill, far more than C2 saves. So: **no pinning, no checkpoint
+from a template guess alone, a small cap of its own.**
+
+**C2a. Within a session: a checkpoint before the latest user message (turn 2, measured ~4–6 s).**
+Turn 2 diverges from turn 1 at token 5,187, ~216 tokens before turn 1's end, about where the
+user message starts (C1 confirms the cause). While prefilling a prompt whose last user
+message starts past the resumed position, also split at the page boundary at or before that
+message's `<|im_start|>user` and stash there. That is at most one extra checkpoint per request,
+in the ordinary LRU, not pinned. If C1 shows the change is elsewhere (e.g. the system prompt's
+tail), anchor there instead, by the same rule: a stable marker, at most one per request.
+
+**C2b. Across sessions: a checkpoint where a new prompt shares a long prefix with a recent
+different conversation (turn 1 of repeat sessions).** Only if C1's second question shows
+repeating prefixes. Data-driven, not template-driven: when a prompt's longest common prefix
+with a recent *different* sequence (the diagnostic already computes it) is ≥ `EXL3_CONV_CKPT_MIN`
+tokens (default 2,048) and no checkpoint covers that point, split at the page boundary at or
+before it and stash. A prefix seen once costs nothing; a harness with a stable system prompt
+pays one extra forward on its second session and resumes from its third session on. These
+checkpoints go into a separate small LRU (`EXL3_CONV_CKPT_MAX`, default 4 checkpoints,
+~450 MiB) so they never push out a live session's checkpoints, and are never pinned.
 
 Details to settle:
 
-- The anchor: first `<|im_start|>user` (its id from the tokenizer), rounded down to a page
-  boundary. With C1's answer, possibly the last `<|im_start|>user` whose content is not a
-  `<tool_response>`.
 - Where: `Job.prefill` in `generator/job.py`, next to the `recurrent_last_page` logic. Split
   the chunk at the anchor (`prefill_end = anchor_b`) and stash there with
   `maybe_stash_recurrent(cache, PAGE_SIZE)` semantics. Check that `is_checkpoint_boundary` with
   an override does what the stash needs at that position.
 - Only when the anchor is past the resumed position and not already stashed (look it up by
   page hash in `generator.recurrent_cache`).
-- Keep the checkpoint warm: it is the most reused one on the server. Consider pinning it in
-  the LRU (a small `RecurrentCache` change) so a long session does not evict it.
-- Patch `patch_exllamav3_conv_ckpt.py`, `EXL3_CONV_CKPT=1`, anchor-checked like the others.
+- Two sessions reaching the same anchor at once: both may stash the same page hash. Check
+  that `RecurrentCache` replaces or dedups the entry, and test it.
+- Patch `patch_exllamav3_conv_ckpt.py`: `EXL3_CONV_CKPT=1` turns on C2a, `EXL3_CONV_CKPT=2` turns on
+  C2a + C2b. Anchor-checked like the other patches. Add a counter to `[prefix-diag]`: anchor
+  checkpoints made, reused, and evicted unused.
 
-Measure with a synthetic pi-like start through the API: a ~5k-token system prompt + the four
+Measure through the API with a synthetic pi-like start: a ~5k-token system prompt + the four
 pi tools, a task, turn 1, then turn 2 built the way pi builds it (after C1, reproduce pi's
-change). Report TTFT for turn 1 of a second session and for turn 2, with and without.
+change). Report TTFT for turn 2 (C2a), for turn 1 of the second and third sessions with the
+same prefix (C2b), with and without. Then run the **multi-harness check** in Gates.
 
 ### C3. One prefill forward instead of two (the ~0.15–0.3 s per follow-up)
 
@@ -211,7 +240,7 @@ the whole chunk:
   the owner's approval.
 
 The same mechanism could make C2's extra forward free (take the anchor's state from the one
-forward). Do C2 with the split first: it is simpler, and it pays only once per restart.
+forward). Do C2 with the split first: it is simpler to verify.
 
 ### C4. Tool-call argument fidelity (done 2026-09-25, `patch_tabbyapi_toolcall_args.py`)
 
@@ -237,10 +266,26 @@ As in `PLAN_B_DECODE.md` "Gates", plus TTFT for turn 1 of a second pi-like sessi
 (C2), and the follow-up table above (C3). Memory: fresh-server `three_sessions.py`, TabbyAPI's
 own GPU memory from `nvidia-smi --query-compute-apps` (the voice stack now shares the machine:
 system-wide numbers include ~15.6 GiB of Higgs TTS + lite Whisper when they run). Also watch the recurrent
-cache: C2 adds one long-lived ~112 MiB checkpoint.
+cache: C2b adds up to `EXL3_CONV_CKPT_MAX` × ~112 MiB.
+
+**Multi-harness check (C2, added 2026-09-26).** Three sessions in parallel through the API,
+each a multi-turn tool conversation with a different system prompt: pi-like (stable), one that
+changes per session (date, working directory and git status in the system prompt, as Claude
+Code does), and a short chat. Run it twice (two "sessions" of each harness). Pass when:
+
+- the live sessions show no new `lost to checkpoints` in `[prefix-diag]` versus the same run
+  without the patch, and their TTFT and decode are not worse than 2%;
+- the per-session-changing harness creates no C2b checkpoint (its prefixes never repeat) and
+  pays no extra forward beyond C2a's;
+- TabbyAPI's GPU memory stays within the fresh-server `three_sessions.py` budget plus
+  `EXL3_CONV_CKPT_MAX` × ~112 MiB;
+- correctness: two prompts that share pages and then diverge before the anchor give greedy
+  outputs identical to a cold prefill of each (the same check as `tools/hist_stash_test.py`).
 
 ## Reporting
 
 As in Plan B: README "What to expect" and the `EXL3_*` table, a dated section in
 `OPTIMIZATION_PLAN.md` "Results", commit, push, pull on the Spark. Then check the owner's next pi
-session in `[prefix-diag]`: turn 1 `resumed ≈ 5120`, turn 2 `lost to checkpoints 0`.
+session in `[prefix-diag]`: turn 2 `lost to checkpoints 0` (C2a); with C2b on, turn 1 of a
+repeat session resumes at the shared prefix. Also check the anchor counters: checkpoints made
+but never reused should stay low.
