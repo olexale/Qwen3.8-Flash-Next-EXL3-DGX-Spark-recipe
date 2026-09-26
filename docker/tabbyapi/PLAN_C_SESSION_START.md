@@ -402,6 +402,26 @@ are skipped.
 **Not shipped as default:** split points move, so outputs are not bit-identical to before
 (the same kind of variation prefix caching already causes). Needs the owner's OK.
 
+### Real traffic with `EXL3_CONV_CKPT=2` (2026-09-26, owner approved enabling it)
+
+Server: `:convckpt`, `EXL3_CONV_CKPT=2`, `EXL3_PREFIX_DIAG=2`. The owner ran two interactive pi
+sessions in different projects (31 requests, 7k → 35k context), then two `pi -p` runs of mine in
+scratch directories.
+
+- **Follow-ups:** `lost to checkpoints 0` on every request after turn 1 in both sessions,
+  including turn 2 (resumed 7,424 and 6,912).
+- **pi's turn-1 block did not appear today:** turn 1 was 7,297 tokens with the first user message
+  at 7,256 (~40 tokens), so there was nothing for C2a to fix; its anchor would have fallen on
+  the prompt's last page, which the fork stashes anyway (C2a made 0). pi's prompt is ~1.9k tokens
+  longer than on 09-25 (5,403). One new pattern: right after turn 1, pi re-sent the conversation
+  *without* the answer plus a 36-token second user message (`diverge at 7293: msg #3 role user
+  +1`, old tail 36 tokens later); it resumed at 7,168, nothing lost.
+- **C2b:** the second project's session shared 4,608 tokens with the first (divergence at 4,728,
+  the working-directory line) and made an anchor there. A scratch-directory run shared only
+  3,840 (pi's prompt differs earlier there) and made one at 3,840; the next run in another
+  directory **resumed at 3,840** instead of 0 and made one at 4,608. Counters after 5 sessions:
+  made b 3, reused 1, evicted unused 0 (separate LRU 3 of 4).
+
 ### C3: one forward instead of two (parity done; stopped at ~1%, needs approval to ship)
 
 FLA's chunked kernel (`vendor/fla/chunk_delta_h.py`) keeps the running state in fp32 registers
