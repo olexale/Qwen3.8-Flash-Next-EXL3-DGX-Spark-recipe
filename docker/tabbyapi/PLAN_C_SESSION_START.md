@@ -5,6 +5,40 @@ then `PLAN_B_DECODE.md` ("Constraints", "Setup", "Tools") and `OPTIMIZATION_PLAN
 "Follow-up turns: re-prefilled answers, and where the time goes (2026-09-25)". Those record
 the measurements this plan builds on; do not repeat them.
 
+
+## Update 2026-09-26 (read first)
+
+- **Image:** `:latest` = `:toolmarkers` (adds `patch_tabbyapi_tool_markers.py`: quoted tool
+  markers stay text, `reasoning_effort` aliases; TabbyAPI parser only, the engine is unchanged).
+  Rollback: `:pre-toolmarkers` (= `:toolargs`). `tests/run_tests.sh` has 38 tests.
+- **GPU clocks:** on 2026-09-26 the owner ran `nvidia-smi -rgc` for a comparison (uncapped,
+  ~2,400 MHz). The "Now" numbers here were measured at the usual cap (~1,580 MHz). Clocks are
+  still the owner's to set: never change them, but record `nvidia-smi --query-gpu=clocks.sm
+  --format=csv` before each measurement, and compare before and after only within one clock
+  state. At uncapped clocks cold prefill is ~1,590 tok/s (vs ~1,300 capped), and decode is
+  code 83 / DevOps 67 / prose 56 tok/s greedy (`tools/compare_bench.py`, 2026-09-26).
+- **Voice stack:** Whisper now runs on transformers instead of vLLM (`~/dev/stt-uk`, container
+  `stt-uk-lite`, ~2.6 GB instead of ~8.2). With Higgs TTS (~13 GB) the stack is ~15.6 GB, not
+  ~21. Both were stopped on 2026-09-26, and the owner restarts them. Memory gates use
+  TabbyAPI's own GPU memory, as before.
+- **Owner's rule, restated 2026-09-26: keep the quality.** Nothing that changes what the model
+  writes ships without the gates and the owner's OK. `reasoning_effort` stays at the template
+  default (`xhigh`), so don't propose lowering it.
+- **Logs survive restarts:** `stop_tabby.sh` archives `docker logs` to `logs/qwen38-tabby-*.log`
+  on the Spark, and the pi session files (`~/.pi/agent/sessions/*/*.jsonl` on the owner's Mac,
+  UTC timestamps, provider `gx10`) give per-turn token usage. Matching the two by time is how
+  the numbers below were made. The prompts are still the owner's data: use lengths and timings
+  only.
+- **What Plan C is worth in real use** (114 pi turns in 8 sessions, 2026-09-23..25, matched
+  to the TabbyAPI logs): waiting time was 23% TTFT and 77% decode. C2 saves ~8 s per session
+  (turn 1 cold 4.5–4.6 s, turn 2 lost to checkpoints 4.7–6.3 s in both 09-25 sessions), about 3%
+  of the total. C3 saves ~0.2 s per turn, about 1%. That is small, but it is low risk and
+  within prefix-caching variation, so do it, and still run the gates. What Plan C cannot fix:
+  follow-ups that bring 4.5–8.5k genuinely new tokens (tool results) on top of 10–30k of
+  context run at ~900–1,200 tok/s, and only prefill throughput (the MoE kernel, A3h) speeds
+  them up. The owner set that aside on 2026-09-26.
+- **C4 is done:** `patch_tabbyapi_toolcall_args.py` shipped on 2026-09-25 (`TABBY_TOOLCALL_ARGS=1`).
+
 ## Goal
 
 Cut the time to first token (TTFT) at the start of every pi session, and the fixed cost of every
@@ -179,7 +213,7 @@ the whole chunk:
 The same mechanism could make C2's extra forward free (take the anchor's state from the one
 forward). Do C2 with the split first: it is simpler, and it pays only once per restart.
 
-### C4. Tool-call argument fidelity (if not already fixed)
+### C4. Tool-call argument fidelity (done 2026-09-25, `patch_tabbyapi_toolcall_args.py`)
 
 If `patch_tabbyapi_toolcall_args.py` does not exist yet, see "Tool-call round trip" above and
 fix it first: it is a correctness bug, not a speed item.
@@ -202,7 +236,7 @@ fix it first: it is a correctness bug, not a speed item.
 As in `PLAN_B_DECODE.md` "Gates", plus TTFT for turn 1 of a second pi-like session and for turn 2
 (C2), and the follow-up table above (C3). Memory: fresh-server `three_sessions.py`, TabbyAPI's
 own GPU memory from `nvidia-smi --query-compute-apps` (the voice stack now shares the machine:
-system-wide numbers include ~21 GiB of Higgs TTS + Whisper). Also watch the recurrent
+system-wide numbers include ~15.6 GiB of Higgs TTS + lite Whisper when they run). Also watch the recurrent
 cache: C2 adds one long-lived ~112 MiB checkpoint.
 
 ## Reporting

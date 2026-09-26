@@ -5,10 +5,49 @@ Tools, "What is known", Findings) and `PLAN_C_SESSION_START.md` "What is known" 
 per-request diagnostic). Plan B's decode work (profile, prompt lookup, 16-row MoE) is the
 baseline here; do not redo it.
 
+
+## Update 2026-09-26 (read first)
+
+- **Image:** `:latest` = `:toolmarkers` (adds `patch_tabbyapi_tool_markers.py`: quoted tool
+  markers stay text, `reasoning_effort` aliases; TabbyAPI parser only, the engine is unchanged).
+  Rollback: `:pre-toolmarkers` (= `:toolargs`). `tests/run_tests.sh` has 38 tests.
+- **GPU clocks:** on 2026-09-26 the owner ran `nvidia-smi -rgc` for a comparison (uncapped,
+  ~2,400 MHz). The "Now" numbers here were measured at the usual cap (~1,580 MHz). Clocks are
+  still the owner's to set: never change them, but record `nvidia-smi --query-gpu=clocks.sm
+  --format=csv` before each measurement, and compare before and after only within one clock
+  state. At uncapped clocks cold prefill is ~1,590 tok/s (vs ~1,300 capped), and decode is
+  code 83 / DevOps 67 / prose 56 tok/s greedy (`tools/compare_bench.py`, 2026-09-26).
+- **Voice stack:** Whisper now runs on transformers instead of vLLM (`~/dev/stt-uk`, container
+  `stt-uk-lite`, ~2.6 GB instead of ~8.2). With Higgs TTS (~13 GB) the stack is ~15.6 GB, not
+  ~21. Both were stopped on 2026-09-26, and the owner restarts them. Memory gates use
+  TabbyAPI's own GPU memory, as before.
+- **Owner's rule, restated 2026-09-26: keep the quality.** Nothing that changes what the model
+  writes ships without the gates and the owner's OK. `reasoning_effort` stays at the template
+  default (`xhigh`), so don't propose lowering it.
+- **Logs survive restarts:** `stop_tabby.sh` archives `docker logs` to `logs/qwen38-tabby-*.log`
+  on the Spark, and the pi session files (`~/.pi/agent/sessions/*/*.jsonl` on the owner's Mac,
+  UTC timestamps, provider `gx10`) give per-turn token usage. Matching the two by time is how
+  the numbers below were made. The prompts are still the owner's data: use lengths and timings
+  only.
+- **Updated share of thinking** (145 pi turns in 8 sessions, 2026-09-23..25, from pi's own
+  usage records): thinking is **56%** of generated tokens, not the 75% measured on two sessions.
+  Tool calls are most of the rest (220 tool-call blocks, 14 text blocks). Over the 114 turns
+  matched to the TabbyAPI logs, **decode is 77% of the owner's waiting time** (median 58 tok/s,
+  ~360 tokens per turn). Decode +20% would have saved 13% of the total, while prefill at
+  blazux's speed (1.85x) would have saved 10%. This plan is the biggest remaining lever. Tool
+  calls are buffered until they parse, so their decode is waiting time too: report tool-call
+  tok/s as its own number in D0 and D4, next to thinking.
+- **Quality:** D1 keeps the output distribution exactly (proof and tests as below) and D2 is
+  lossless, so both fit the owner's rule. D1 still needs the owner's explicit OK before the
+  live trial.
+- **Baseline for D0:** the archived logs (`logs/`) give a pre-D0 baseline of per-request decode
+  rates, but they don't separate thinking from the rest. D0's `[decode-stats]` line is what
+  splits them.
+
 ## Goal and end state
 
-Make decode of **thinking** faster: it is 75% of the tokens the model generates in the owner's
-pi sessions (24% tool calls, 1% visible answer text; two sessions, 30 turns, 2026-09-25), and it
+Make decode of **thinking** faster: it is 56% of the tokens the model generates in the owner's
+pi sessions (145 turns, 2026-09-23..25; the first estimate was 75% from two sessions), and it
 decodes at the slow "prose" rate (~47–50 tok/s, vs 100–130 on edit tool calls).
 
 **Every candidate ends in exactly one of two states:** made permanent (on by default in
@@ -37,8 +76,8 @@ are the owner's data). Two additions:
   needed), and `run_tests.sh` passes on the new image before it is tagged `:latest`.
 
 `reasoning_effort` (the template's `xhigh` default vs `medium`/`low`) would cut thinking tokens
-far more than any decode change, but it changes what the model writes: the owner's decision,
-not part of this plan unless they ask (then: measure tokens and task outcomes on a fixed task
+far more than any decode change, but it changes what the model writes. **The owner decided on
+2026-09-26 to keep the quality: it stays `xhigh`.** It is not part of this plan unless they ask (then: measure tokens and task outcomes on a fixed task
 set, both settings).
 
 ## What is known
