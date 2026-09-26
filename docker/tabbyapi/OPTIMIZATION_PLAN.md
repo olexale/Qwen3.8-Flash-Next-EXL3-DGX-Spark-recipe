@@ -716,5 +716,8 @@ Details and tables: `PLAN_C_SESSION_START.md` "Findings (2026-09-26)". In short:
   Moves prefill split points, so it is not bit-identical to an unchunked prefill; against a cold
   prefill chunked at the anchor the first-token logits are bit-identical (or KL ≤ 7e-4).
   Awaiting the owner's OK.
-- **C3 sized:** FLA stores per-chunk states in bf16; a single-forward last-page checkpoint needs
-  an fp32 store added to the Triton kernel before parity can hold.
+- **C3 parity:** FLA stores per-chunk states in bf16, so `patch_exllamav3_fla_capture.py` (not in
+  the image) adds an fp32 capture at one chunk; on identical inputs it is bit-identical to the
+  split's state. Full model: a one-forward checkpoint matches the split's where inputs match
+  (layer 0) and differs elsewhere like a moved chunk boundary; first-token KL ≤ 5e-6; follow-up
+  TTFT −0.17 s. Not wired in (~1%, needs approval).

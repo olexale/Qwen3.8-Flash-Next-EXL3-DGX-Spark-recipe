@@ -402,12 +402,31 @@ are skipped.
 **Not shipped as default:** split points move, so outputs are not bit-identical to before
 (the same kind of variation prefix caching already causes). Needs the owner's OK.
 
-### C3: one forward instead of two (sized, not started)
+### C3: one forward instead of two (parity done; stopped at ~1%, needs approval to ship)
 
-FLA's chunked kernel (`vendor/fla/chunk_delta_h.py`) keeps the running state in fp32
-registers but stores the per-chunk states `h` in the input dtype (bf16), and only the final
-state in fp32. So a checkpoint taken from `h[(b - start) / 64]` would be bf16-rounded where the
-split stores fp32: not the bit-identical state the plan expected. It needs an extra fp32 store
-at one chunk index in the Triton kernel (small), plus the conv windows from the pre-conv
-inputs, the PLE state and the job plumbing, then parity and gates, for ~0.2 s per follow-up
-(~1% of waiting time).
+FLA's chunked kernel (`vendor/fla/chunk_delta_h.py`) keeps the running state in fp32 registers
+but stores the per-chunk states `h` in the input dtype (bf16); only the final state is fp32. So
+`h[(b - start) / 64]` would be a bf16-rounded checkpoint (off by up to ~3.7e-3), not the state the
+split stores. **`patch_exllamav3_fla_capture.py`** (not in the Dockerfile) adds an optional fp32
+store of the state at one chunk index (`chunk_gated_delta_rule(..., capture_state=buf,
+capture_chunk=n)`); nothing changes when it is not asked for.
+
+- **Kernel parity** (`tools/fla_capture_parity.py`, no model): on identical inputs the captured
+  state equals the split forward's final state bit for bit (T 257–8,192, six boundaries), and
+  outputs and final state are unchanged by the capture.
+- **Full model** (`tools/c3_parity.py`, TabbyAPI stopped): a checkpoint assembled from one
+  forward (GDN: captured fp32 state + last 4 pre-conv inputs; PLE: conv-stream columns + token
+  context) against the split's stash. Where the inputs are identical it is bit-identical (GDN
+  layer 0, PLE on a cold prompt), so the assembly is exact. Deeper layers differ (max |diff| ~3
+  on rare large values) because the rows before the boundary go through GEMM/MoE kernels whose
+  path depends on the row count (5,888 vs 6,015 rows; 512 vs 593), the same effect as moving a
+  chunk boundary; the checkpoint stays consistent with the K/V the same forward wrote.
+  First-token logits one vs split: KL 1.2e-6 (cold 6k prompt), 5.2e-6 (follow-up); greedy 64
+  tokens identical (cold) / diverge at 55 (follow-up, greedy noise level).
+- **Speed:** follow-up TTFT 0.856 → 0.682 s (−0.17 s; 512 + 81 rows after a 6.1k context).
+
+Remaining to ship: wire the capture into `Job.prefill` in place of the last-page split (GDN
+module forward and PLE take the boundary from params, the job builds the stash dict as
+`patch_exllamav3_hist_stash.py` does), then the greedy/needle gates. At ~0.17 s per turn (~1% of
+waiting time) this is below Plan B's ~2% line, and it is not bit-identical, so it waits for the
+owner's decision.
