@@ -116,6 +116,13 @@ PROMPTS = {
     "devops": render([{"role": "user", "content": "Explain, for a DevOps engineer, how Kubernetes horizontal pod autoscaling decides when to scale, including the formula it uses and two common pitfalls. Then give a complete example HPA YAML."}]),
     "puzzle": render([{"role": "user", "content": "Three boxes are labeled apples, oranges and mixed; every label is wrong. You may draw one fruit from one box without looking inside. How do you relabel all boxes correctly? Explain the reasoning step by step."}]),
 }
+def render_nt(msgs, tools=None):
+    return _TPL.render(messages=msgs, tools=tools, add_generation_prompt=True, enable_thinking=False)
+PROMPTS["code_nt"] = render_nt([{"role": "user", "content": "Write a Python function that parses an nginx access log line into a dict with fields ip, timestamp, method, path, status, bytes. Include a docstring, type hints, and a short usage example."}])
+PROMPTS["prose_nt"] = render_nt([{"role": "user", "content": "Write a vivid 350-word short story about a lighthouse keeper on a remote island in Alaska who discovers something unexpected washed ashore after a storm."}])
+PROMPTS["edit_nt"] = render_nt([{"role": "system", "content": SYS}, {"role": "user", "content": "In " + REAL_PATH + ", make estimate() return 0.0 when no populated bin is at or below the score instead of using the nearest bin above, and rename decay_step() to age_step(). Use the edit tool."},
+    {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "read", "arguments": {"path": REAL_PATH}}}]},
+    {"role": "tool", "content": REAL}], PI_TOOLS)
 sel = os.environ.get("PROMPTS", "all")
 if sel != "all":
     PROMPTS = {k: v for k, v in PROMPTS.items() if k in sel.split(",")}
@@ -159,8 +166,18 @@ def filt(l, T):
     pr = pr * ((c - pr) < TOP_P)
     return i, pr / pr.sum(dim=-1, keepdim=True)
 
+THINK_START = tok.single_id("<think>")
+def think_on(prompt_ids):
+    """Thinking is on when the prompt ends inside an open <think> (as patch_exllamav3_decode_stats.py)"""
+    t = prompt_ids.view(-1)[-16:].tolist()
+    o = max((i for i, x in enumerate(t) if x == THINK_START), default=-1)
+    c = max((i for i, x in enumerate(t) if x == THINK_END), default=-1)
+    return o > c
+
 def in_thinking():
     job = CAP["job"]
+    if not CAP["think_on"]:
+        return False
     seq = job.sequences[0].sequence_ids
     n = len(seq)
     if n <= CAP["plen"]:
@@ -180,7 +197,8 @@ def analyze(L):
         iq, pq = filt(Y, T)
         m = (ip[:, :, None] == iq[:, None, :])
         specs.append((torch.minimum(pp[:, :, None], pq[:, None, :]) * m).sum((1, 2)))
-    st = torch.stack([a_cur] + specs, dim=1).cpu().tolist()
+    _, pq1 = filt(Y, 1.0)
+    st = torch.stack([a_cur] + specs + [pq1[:, 0]], dim=1).cpu().tolist()
     CAP["rounds"].append({"think": in_thinking(), "a": st, "w": len(dr),
                           "pos": len(CAP["job"].sequences[0].sequence_ids), "d0": int(d[0])})
 
@@ -208,6 +226,7 @@ def run(gen, name, seed, stats):
     torch.manual_seed(seed)
     job = Job(input_ids=ids[name], max_new_tokens=NTOK, stop_conditions=[IM_END], sampler=make_sampler())
     CAP["job"], CAP["plen"], CAP["draft"] = job, ids[name].shape[-1], []
+    CAP["think_on"] = think_on(ids[name])
     gen.enqueue(job)
     widths = []
     _mtp = gen.iterate_draftmodel_mtp_gen
@@ -288,6 +307,7 @@ if 0 in PASSES:
 cw = {w: med(v) for w, v in cost.items()}
 
 names = ["cur"] + [f"specT{T}" for T in Q_TEMPS]
+TAUS = [float(x) for x in os.environ.get("TAUS", "0.3,0.5,0.6,0.7,0.8,0.9,0.95,1.01").split(",")]
 for ps in sorted(results):
     for label, keep in (("thinking", True), ("rest", False)):
         rounds = [r for _, _, rr, _ in results[ps] for r in rr if r["think"] == keep]
@@ -307,6 +327,13 @@ for ps in sorted(results):
         base = ex[0]
         print(f"EXPECT pass {ps} {label}: tokens per round, same windows: " + ", ".join(
             f"{n} {e:.3f} ({100 * (e / base - 1):+.1f}%)" for n, e in zip(names, ex)), flush=True)
+        # Mixed rule: a point mass at the argmax (the current rule) where the head's q has a top
+        # probability >= tau, the sampled q (T 1.0) elsewhere; any such q keeps the output exact
+        mix = []
+        for tau in TAUS:
+            e = sum(exp_tokens([(a[0] if a[-1] >= tau else a[1]) for a in r["a"]], r["w"]) for r in rounds) / len(rounds)
+            mix.append(f"tau {tau} {e:.3f} ({100 * (e / base - 1):+.1f}%)")
+        print(f"MIX pass {ps} {label}: tokens per round, same windows: " + ", ".join(mix), flush=True)
         if ps == 1:
             meas = [s["tok"] for _, _, _, st in results[ps] for s in st if s["think"] == keep and s["w"] > 0]
             print(f"EXPECT pass 1 {label}: measured tokens per drafted round {statistics.fmean(meas):.3f} "

@@ -52,19 +52,36 @@ def test_accept_bruteforce():
         assert tok[b, :len(out)].tolist() == out, (b, out, tok[b])
 
 
-def test_residual_and_dense_q():
+def test_round_core_residual_and_pad_q():
     V = 7
-    p = torch.tensor([[[0.5, 0.2, 0.3, 0, 0, 0, 0]]], device=DEV)
-    q = torch.tensor([[[0.1, 0.6, 0.3, 0, 0, 0, 0]]], device=DEV)
-    g = torch.Generator(device=DEV).manual_seed(3)
-    r = torch.cat([ss.residual_samples(p, q, g) for _ in range(2000)])
-    assert set(r.view(-1).tolist()) == {0}, "residual max(0, p - q) is only token 0 here"
-    # p == q: no rejection is possible; the fallback samples p
-    r = torch.cat([ss.residual_samples(p, p, g) for _ in range(500)]).view(-1).tolist()
-    assert set(r) <= {0, 1, 2}
-    d = torch.tensor([4, 2], device=DEV)
-    dq = ss.dense_q([(torch.tensor([2, 5], device=DEV), torch.tensor([0.25, 0.75], device=DEV))], d, V)
-    assert dq[0].tolist() == [0, 0, 0.25, 0, 0, 0.75, 0] and dq[1].tolist() == [0, 0, 1, 0, 0, 0, 0], dq
+    cand = torch.arange(V, device=DEV).view(1, 1, V).expand(1, 2, V)
+    pc = torch.tensor([[[0.5, 0.2, 0.3, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0]]], device=DEV)
+    qi = torch.tensor([[[0, 1, 2]]], device=DEV)
+    qp = torch.tensor([[[0.1, 0.6, 0.3]]], device=DEV)
+    d = torch.tensor([[1]], device=DEV)
+    seen = set()
+    for _ in range(300):
+        # u = 1: the draft (p/q = 1/3) is rejected; the residual max(0, p - q) is only token 0
+        tok, n = ss.round_core(cand, pc, torch.tensor([5], device=DEV), qi, qp, d,
+                               torch.ones(1, 1, device=DEV), torch.rand(1, 1, V, device=DEV))
+        assert int(n) == 0
+        seen.add(int(tok[0, 0]))
+    assert seen == {0}, seen
+    tok, n = ss.round_core(cand, pc, torch.tensor([5], device=DEV), qi, qp, d,
+                           torch.zeros(1, 1, device=DEV), torch.rand(1, 1, V, device=DEV))
+    assert int(n) == 1 and tok[0].tolist() == [1, 5]
+    dd = torch.tensor([4, 2], device=DEV)
+    pi, pp = ss.pad_q([(torch.tensor([2, 5], device=DEV), torch.tensor([0.25, 0.75], device=DEV))], dd, 4)
+    assert pi.tolist() == [[2, 5, -1, -1], [2, -1, -1, -1]] and pp.tolist() == [[0.25, 0.75, 0, 0], [1, 0, 0, 0]], (pi, pp)
+
+
+def test_q_dist_tau():
+    y = torch.tensor([[5.0, 1.0, 0.5, 0.0], [1.0, 0.9, 0.8, 0.7]], device=DEV)
+    qi, qp = ss.q_dist(y, 1.0, 3, 1.0, tau=0.8)
+    assert qp[0].tolist() == [1.0, 0.0, 0.0] and int(qi[0, 0]) == 0      # confident row: point mass
+    assert 0.3 < float(qp[1, 0]) < 0.4 and abs(float(qp[1].sum()) - 1) < 1e-6
+    qi, qp = ss.q_dist(y, 1.0, 3, 1.0, tau=1.0)
+    assert float(qp[0, 0]) < 1.0
 
 
 # --- p is the fused kernel's distribution ---
@@ -110,6 +127,21 @@ def test_fused_p_kept_set_matches_eager():
         assert torch.allclose(p.sum(-1), torch.ones(64, device=DEV), atol=1e-5)
 
 
+def test_window_p_equals_dense():
+    step = ComboSampler(temperature=1.0, top_k=20, top_p=0.95).steps[-1]
+    L = _logits(16, 5000, 3)
+    _, p = ss.fused_p(L, step, 5000, 5)
+    _, cand, pc, ovf = ss.window_p(L, step, 5000, 5)
+    assert not ovf.any()
+    assert torch.allclose(torch.gather(p, 1, cand), pc, atol=1e-7)
+    assert torch.allclose(pc.sum(-1), p.sum(-1), atol=1e-6)            # all of p's mass is in the candidates
+    # 80 tokens tied at the top: the kept set does not fit in the 64 candidates
+    T = L.clone()
+    T[0, :80] = 7.95
+    _, _, _, ovf = ss.window_p(T, step, 5000, 5)
+    assert bool(ovf[0]) and not ovf[1:].any()
+
+
 def test_fused_p_matches_kernel_samples():
     step = ComboSampler(temperature=1.0, top_k=20, top_p=0.95).steps[-1]
     V, R, N = 300, 4, 50000
@@ -130,10 +162,11 @@ def test_fused_p_matches_kernel_samples():
 
 # --- the emitted token distribution over chains ---
 
-def _chain_test(Vt, w, p_step, q_temp, q_topk, q_topp, point_mass_pos, B, seed):
+def _chain_test(Vt, w, p_step, q_temp, q_topk, q_topp, point_mass_pos, B, seed, tau=1.0):
     """Toy model over Vt tokens: logits depend on the whole prefix (tables for every prefix up
-    to w + 2 tokens). Speculative rounds of w drafts until 3 tokens are emitted per trial; the
-    joint distribution of the first 3 must be p(t0) p(t1|t0) p(t2|t0,t1)."""
+    to w + 2 tokens). Speculative rounds of w drafts (ss.round_core on ss.window_p candidates,
+    drafts from ss.q_dist) until 3 tokens are emitted per trial; the joint distribution of the
+    first 3 must be p(t0) p(t1|t0) p(t2|t0,t1) with p the kernel's (ss.fused_p)."""
     depth = w + 3
     sizes = [Vt ** n for n in range(depth)]
     offs = [sum(sizes[:n]) for n in range(depth)]
@@ -142,8 +175,10 @@ def _chain_test(Vt, w, p_step, q_temp, q_topk, q_topp, point_mass_pos, B, seed):
     pl = (1.2 * torch.randn(total, Vt, generator=g) + 4).half().to(DEV)
     ql = pl.float() + 0.8 * torch.randn(total, Vt, generator=g).to(DEV)   # a different draft model
     P = torch.cat([ss.fused_p(pl[i:i + 4096], p_step, Vt, 99 + i)[1] for i in range(0, total, 4096)])
-    qi, qp = ss.q_dist(ql, 1.0 / q_temp, q_topk, q_topp)
-    Q = torch.zeros(total, Vt, device=DEV).scatter_(1, qi, qp)
+    CW = [ss.window_p(pl[i:i + 4096], p_step, Vt, 99 + i) for i in range(0, total, 4096)]
+    C = torch.cat([c[1] for c in CW]); PC = torch.cat([c[2] for c in CW])
+    assert not torch.cat([c[3] for c in CW]).any()
+    QI, QP = ss.q_dist(ql, 1.0 / q_temp, q_topk, q_topp, tau=tau)
     gt = torch.Generator(device=DEV).manual_seed(seed)
 
     def code(pref, n):   # pref (B, n) tokens -> table row
@@ -162,27 +197,29 @@ def _chain_test(Vt, w, p_step, q_temp, q_topk, q_topp, point_mass_pos, B, seed):
             idx = act[count[act] == n]
             if idx.numel() == 0:
                 continue
-            pref = emitted[idx, :n]
-            ds, ps, qs = [], [], []
-            cur = pref
+            nb = idx.numel()
+            cur = emitted[idx, :n]
+            ds, cs, qis, qps = [], [], [], []
             for i in range(w):
                 c = code(cur, n + i)
-                ps.append(P[c])
-                if i == point_mass_pos:   # a lookup-style deterministic draft
+                cs.append(c)
+                if i == point_mass_pos:   # a lookup-style deterministic draft: point mass
                     di = (cur.sum(1) * 3 + 1) % Vt if n + i > 0 else torch.ones_like(c)
-                    qrow = torch.zeros(idx.numel(), Vt, device=DEV).scatter_(1, di.view(-1, 1), 1.0)
+                    qi = torch.full_like(QI[c], -1); qi[:, 0] = di
+                    qp = torch.zeros_like(QP[c]); qp[:, 0] = 1.0
                 else:
-                    qrow = Q[c]
-                    di = torch.multinomial(qrow, 1, generator=gt).view(-1)
-                qs.append(qrow)
-                ds.append(di)
+                    qi, qp = QI[c], QP[c]
+                    di = torch.gather(qi, 1, ss.gumbel_pick(qp, torch.rand(qp.shape, generator=gt, device=DEV)).view(-1, 1)).view(-1)
+                qis.append(qi); qps.append(qp); ds.append(di)
                 cur = torch.cat([cur, di.view(-1, 1)], 1)
-            ps.append(P[code(cur, n + w)])
-            p = torch.stack(ps, 1); q = torch.stack(qs, 1); d = torch.stack(ds, 1)
-            u = torch.rand(d.shape, generator=gt, device=DEV)
-            resid = ss.residual_samples(p[:, :w], q, gt)
-            bonus = torch.multinomial(p[:, w], 1, generator=gt).view(-1)
-            tok, na = ss.accept(p, q, d, u, resid, bonus)
+            cs.append(code(cur, n + w))
+            cc = torch.stack(cs, 1)
+            d = torch.stack(ds, 1)
+            bonus = torch.multinomial(P[cc[:, w]], 1, generator=gt).view(-1)
+            K = C.shape[1]
+            tok, na = ss.round_core(C[cc], PC[cc], bonus, torch.stack(qis, 1), torch.stack(qps, 1), d,
+                                    torch.rand((nb, w), generator=gt, device=DEV),
+                                    torch.rand((nb, w, K), generator=gt, device=DEV))
             for j in range(w + 1):
                 sel = na >= j
                 emitted[idx[sel], n + j] = tok[sel, j]
@@ -204,7 +241,7 @@ def _chain_test(Vt, w, p_step, q_temp, q_topk, q_topp, point_mass_pos, B, seed):
 
 
 def test_chain_distribution_plain_sampling():
-    step = ComboSampler(temperature=1.0).steps[-1]
+    step = ComboSampler(temperature=1.0, top_k=6).steps[-1]      # top-k over the whole toy vocab
     z, chi2, k = _chain_test(6, 3, step, q_temp=1.3, q_topk=4, q_topp=1.0, point_mass_pos=None, B=300000, seed=5)
     assert z < 4.5, (z, chi2, k)
 
@@ -217,21 +254,25 @@ def test_chain_distribution_topk_topp():
 
 def test_chain_distribution_lookup_position():
     step = ComboSampler(temperature=1.0, top_k=5, top_p=0.95).steps[-1]
-    z, chi2, k = _chain_test(6, 3, step, q_temp=1.0, q_topk=0, q_topp=1.0, point_mass_pos=1, B=300000, seed=7)
+    z, chi2, k = _chain_test(6, 3, step, q_temp=1.0, q_topk=6, q_topp=1.0, point_mass_pos=1, B=300000, seed=7)
+    assert z < 4.5, (z, chi2, k)
+
+
+def test_chain_distribution_tau_point_masses():
+    step = ComboSampler(temperature=1.0, top_k=5, top_p=0.95).steps[-1]
+    z, chi2, k = _chain_test(6, 3, step, q_temp=1.0, q_topk=5, q_topp=0.95, point_mass_pos=None, B=300000, seed=8, tau=0.45)
     assert z < 4.5, (z, chi2, k)
 
 
 def test_chain_test_detects_the_wrong_rule():
     """The same harness rejects a wrong acceptance (accept a sampled draft with p(d), no ratio)"""
-    real = ss.accept
-    def wrong(p, q, d, u, resid, bonus):
-        return real(p, torch.ones_like(q), d, u, resid, bonus)
-    ss.accept = wrong
+    real = ss.accept_core
+    ss.accept_core = lambda pd, qd, d, u, resid, bonus: real(pd, torch.ones_like(qd), d, u, resid, bonus)
     try:
-        step = ComboSampler(temperature=1.0).steps[-1]
+        step = ComboSampler(temperature=1.0, top_k=6).steps[-1]
         z, _, _ = _chain_test(6, 3, step, q_temp=1.3, q_topk=4, q_topp=1.0, point_mass_pos=None, B=300000, seed=5)
     finally:
-        ss.accept = real
+        ss.accept_core = real
     assert z > 10, z
 
 
@@ -251,7 +292,9 @@ def test_scope():
     assert isinstance(ss.job_step(_job(tabby_like)), SS_Fused)
     assert ss.job_step(_job(ComboSampler(temperature=0.0))) is None                   # greedy
     assert ss.job_step(_job(ComboSampler(temperature=1.0, rep_p=1.1))) is None        # active penalty
-    assert ss.job_step(_job(ComboSampler(temperature=1.0, min_p=0.05))) is None       # min-p
+    assert ss.job_step(_job(ComboSampler(temperature=1.0, min_p=0.05, top_k=20))) is None   # min-p
+    assert ss.job_step(_job(ComboSampler(temperature=1.0))) is None                   # no top-k
+    assert ss.job_step(_job(ComboSampler(temperature=1.0, top_k=100))) is None        # top-k > 64
     assert ss.job_step(_job(tabby_like, filters=[object()])) is None                  # grammar filter
     assert ss.job_step(_job(tabby_like, return_probs=True)) is None
 
@@ -293,7 +336,7 @@ def test_verify_window():
     step = ComboSampler(temperature=1.0, top_k=20, top_p=0.95).steps[-1]
     L = _logits(w + 1, V, 11).view(1, w + 1, V)
     d = torch.tensor([3, 7, 1, 9])
-    qs = [ss.q_dist(L[0, i].float(), 1.0, 20, 0.95) for i in range(w - 1)]   # last position: point mass
+    qs = [tuple(t[0] for t in ss.q_dist(L[0, i], 1.0, 20, 0.95)) for i in range(w - 1)]   # last: point mass
     gen = types.SimpleNamespace(tokenizer=types.SimpleNamespace(actual_vocab_size=V))
     for trial in range(50):
         job = _job(ComboSampler(temperature=1.0, top_k=20, top_p=0.95), rng=random.Random(trial))

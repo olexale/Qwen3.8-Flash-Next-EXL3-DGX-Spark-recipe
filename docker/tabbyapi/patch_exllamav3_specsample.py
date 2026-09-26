@@ -12,14 +12,19 @@ offline sizing (tools/spec_sample_size.py) measured +10.5% tokens per verify rou
 
 Draft side (MTP head, qwen4_exp_mtp.sample_from_state): for a job this applies to, d is drawn
 from q = the head's logits at the job's temperature, cut to its top-k (at most 64 tokens) and
-top-p, and q is kept per position. Any q keeps the output exact; this one is close to p.
+top-p, and q is kept per position. Any q keeps the output exact; this one is close to p. EXL3_SPEC_TAU < 1 turns positions whose
+q has a top probability >= tau into a point mass at the argmax (the current rule); sizing found
+no gain from it (thinking +10.7% tokens per round at tau 1, less at any lower tau), so it is 1.
 Greedy jobs and jobs this does not apply to keep the argmax draft.
 
 Verify side (Generator.iterate_gen): the job's sampler (the fused kernel, SS_Fused) samples
 all positions of the verify window in one call. Its histogram workspace then holds, per row,
 the max logit and the kept-set bound, and the kept set is recomputed here with the kernel's
 own fp32 binning expression, so p is exactly the distribution the kernel samples from
-(softmax at the job's temperature over that set). Per drafted position i, with u ~ U(0, 1):
+(softmax at the job's temperature over that set). The kept set is a top segment of the
+logits, so p is computed on the max(64, 2 * top_k) highest logits only (full-vocabulary
+elementwise passes cost ~0.8 ms per round on GB10); if ties fill all of them, the round falls
+back to the fork's path, which samples afresh (a decision on the logits alone, so exact). Per drafted position i, with u ~ U(0, 1):
 accept d_i if u * q_i(d_i) < p_i(d_i); at the first rejection emit a sample of
 max(0, p_i - q_i) (normalized); if every draft is accepted, the kernel's own sample of the
 last position is the bonus token. One device-to-host copy per round.
@@ -28,8 +33,9 @@ Prompt-lookup drafts (patch_exllamav3_pld.py) are point masses (q = 1 at the dra
 accept with p(d), residual p without d, i.e. the current rule. In a gated lookup round the
 first position was drawn from the MTP head's q and keeps it.
 
-Applies to a job when its sampler is the fused kernel alone (no active penalties, logit bias,
-bans or min-p; TabbyAPI's no-op penalty steps are simplified away) and it has no filters,
+Applies to a job when its sampler is the fused kernel alone with a top-k of at most 64 (no
+active penalties, logit bias, bans or min-p; TabbyAPI's no-op penalty steps are simplified
+away; pi's requests use the qwen38 preset, top-k 20) and it has no filters,
 forced tokens, logit masks or probability/logit outputs. Anything else runs the fork's path
 unchanged; with sampled drafts that path is still exact, because its output is always the
 target's own sample. Dynamic drafting keeps working on the head's max logit; rounds with
@@ -60,6 +66,8 @@ SPEC = os.environ.get("EXL3_SPEC_SAMPLE", "0") == "1"
 TRIAL_AB = os.environ.get("EXL3_TRIAL_AB", "0") == "1"
 ACTIVE = SPEC or TRIAL_AB
 Q_MAX_K = 64                     # the draft distribution keeps at most this many tokens
+# Draft positions whose q has a top probability >= TAU draft the argmax as a point mass
+TAU = float(os.environ.get("EXL3_SPEC_TAU", "1.0"))
 
 # The fused kernel's histogram workspace (sampling_fused.cuh): per row a coarse and a refinement
 # histogram (1024 buckets x (u64 mass + u32 count)), then the control block
@@ -87,7 +95,9 @@ def job_step(job):
     st = s.steps[-1]
     if not isinstance(st, SS_Fused):
         return None
-    if st.mode not in (SS_Fused.MODE_SAMPLE, SS_Fused.MODE_SAMPLE_FILTERS) or st.filters & SS_Fused.F_MINP:
+    # a top-k filter of at most Q_MAX_K tokens (p is computed over the top candidates only)
+    if (st.mode != SS_Fused.MODE_SAMPLE_FILTERS or st.filters & SS_Fused.F_MINP or
+            not st.filters & SS_Fused.F_TOPK or not 0 < st.top_k <= Q_MAX_K):
         return None
     if (job.filters or job.forced_ids is not None or job.return_probs or job.return_top_tokens or
             getattr(job, "return_logits", False) or len(job.sequences) != 1):
@@ -129,18 +139,32 @@ def draft_rows(jobs):
     return cfgs, list(jobs)
 
 
-def q_dist(logits_row, inv_temp, top_k, top_p):
-    """(ids, probs) of the draft distribution q for a row (or rows) of head logits"""
-    x = logits_row.float() * inv_temp
-    k = top_k if 0 < top_k <= Q_MAX_K else Q_MAX_K
-    k = min(k, x.shape[-1])
-    v, i = torch.topk(x, k)
-    pr = torch.softmax(v, dim = -1)
+def q_dist(y, inv_temp, top_k, top_p, tau = None):
+    """(ids, probs), each (rows, k), of the draft distribution q for rows of head logits: the
+    job's temperature, top-k and top-p; rows whose top probability is at least tau become a
+    point mass at the argmax (the current rule), which suits confident positions better"""
+    if tau is None:
+        tau = TAU
+    if y.dim() == 1:
+        y = y.unsqueeze(0)
+    k = min(top_k if 0 < top_k <= Q_MAX_K else Q_MAX_K, y.shape[-1])
+    v, i = torch.topk(y, k, dim = -1)
+    pr = torch.softmax(v.float() * inv_temp, dim = -1)
     if top_p < 1.0:
         c = torch.cumsum(pr, dim = -1)
         pr = pr * ((c - pr) < top_p)
         pr = pr / pr.sum(dim = -1, keepdim = True)
+    if tau < 1.0:
+        one = torch.zeros_like(pr)
+        one[:, 0] = 1.0
+        pr = torch.where(pr[:, :1] >= tau, one, pr)
     return i, pr
+
+
+def gumbel_pick(pr, noise_u):
+    """Index of a categorical sample of the rows of pr (Gumbel-max on uniforms noise_u)"""
+    g = -torch.log(-torch.log(noise_u.clamp(1e-20, 1.0 - 1e-7)))
+    return torch.argmax(torch.log(pr) + g, dim = -1)
 
 
 def draft_sample(y, ids, params):
@@ -154,10 +178,11 @@ def draft_sample(y, ids, params):
             out.append(None)
             continue
         inv_temp, top_k, top_p, job = cfg
-        qi, qp = q_dist(y[row], inv_temp, top_k, top_p)
+        qi, qp = q_dist(y[row:row + 1], inv_temp, top_k, top_p)
         g = job_generator(job, y.device)
-        ids[row] = qi[torch.multinomial(qp, 1, generator = g)[0]]
-        out.append((qi, qp))
+        j = gumbel_pick(qp, torch.rand(qp.shape, generator = g, device = y.device))
+        ids[row] = qi[0, j[0]]
+        out.append((qi[0], qp[0]))
     params["spec_q"] = out
     return ids
 
@@ -184,47 +209,75 @@ def calibrator(gen, spec):
     return sc
 
 
+def _kernel(logits, step, size, rand_u32):
+    """Run the fused step on (R, V) logits: (samples (R,), ctrl m (R, 1), keep bound (R, 1) x2 or None)"""
+    R, V = logits.shape
+    st = SamplingState(rand_u32 = rand_u32, bsz = R, dim = V, in_logits = logits, fused_dim = size)
+    step.run(st)
+    if step.mode != SS_Fused.MODE_SAMPLE_FILTERS:
+        return st.sample.view(R), None
+    hist = step.histograms[(logits.device, R)].view(R, -1)
+    ctrl = hist[:, CTRL_OFFSET:CTRL_OFFSET + 24].contiguous().view(torch.int32)
+    return st.sample.view(R), (ctrl[:, 0:1].contiguous().view(torch.float32), ctrl[:, 4:5], ctrl[:, 5:6])
+
+
+def _kept(x, step, bound):
+    """The kernel's kept set over logits x (R, n) (float32, a top segment or all of a row)"""
+    keep = x != -float("inf")
+    if bound is None:
+        return keep, torch.where(keep, x, torch.full_like(x, -float("inf"))).max(dim = -1, keepdim = True).values
+    m, kb, ks = bound
+    scale = (torch.tensor(float(HIST_BUCKETS) / HIST_RANGE, dtype = torch.float32) *
+             torch.tensor(step.inv_temp_filter, dtype = torch.float32)).item()
+    db = (m - x) * scale
+    b = torch.clamp(db, max = float(HIST_BUCKETS - 1)).to(torch.int32)
+    s = torch.clamp(torch.trunc((db - b.float()) * float(HIST_BUCKETS)), 0.0, float(HIST_BUCKETS - 1)).to(torch.int32)
+    return keep & ((x == m) | (b < kb) | ((b == kb) & (s <= ks))), m
+
+
+def _probs(x, keep, m, step):
+    w = torch.where(keep, torch.exp((x - m) * float(torch.tensor(step.inv_temp, dtype = torch.float32))),
+                    torch.zeros_like(x))
+    return w / w.sum(dim = -1, keepdim = True)
+
+
 def fused_p(logits, step, size, rand_u32):
-    """Sample every row with the fused step and return (samples (R,), p (R, V) float32), p being
-    exactly the distribution the kernel sampled from. logits: (R, V) half or float"""
+    """Dense form: sample every row with the fused step and return (samples (R,), p (R, V)
+    float32), p being exactly the distribution the kernel sampled from"""
     R, V = logits.shape
     if logits.dtype not in (torch.half, torch.float):
         logits = logits.float()
     logits = logits.contiguous()
-    st = SamplingState(rand_u32 = rand_u32, bsz = R, dim = V, in_logits = logits, fused_dim = size)
-    step.run(st)
-    sample = st.sample.view(R)
+    sample, bound = _kernel(logits, step, size, rand_u32)
     x = logits.float()
-    col = torch.arange(V, device = x.device)
-    keep = (x != -float("inf")) & (col < size)
-    if step.mode == SS_Fused.MODE_SAMPLE_FILTERS:
-        hist = step.histograms[(logits.device, R)].view(R, -1)
-        ctrl = hist[:, CTRL_OFFSET:CTRL_OFFSET + 24].contiguous().view(torch.int32)
-        m = ctrl[:, 0:1].contiguous().view(torch.float32)
-        kb = ctrl[:, 4:5]
-        ks = ctrl[:, 5:6]
-        scale = (torch.tensor(float(HIST_BUCKETS) / HIST_RANGE, dtype = torch.float32) *
-                 torch.tensor(step.inv_temp_filter, dtype = torch.float32)).to(x.device)
-        db = (m - x) * scale
-        b = torch.clamp(db, max = float(HIST_BUCKETS - 1)).to(torch.int32)
-        s = torch.clamp(torch.trunc((db - b.float()) * float(HIST_BUCKETS)), 0.0, float(HIST_BUCKETS - 1)).to(torch.int32)
-        keep &= (x == m) | (b < kb) | ((b == kb) & (s <= ks))
-    else:
-        m = torch.where(keep, x, torch.full_like(x, -float("inf"))).max(dim = -1, keepdim = True).values
-    inv_t = torch.tensor(step.inv_temp, dtype = torch.float32, device = x.device)
-    w = torch.where(keep, torch.exp((x - m) * inv_t), torch.zeros_like(x))
-    return sample, w / w.sum(dim = -1, keepdim = True)
+    x = torch.where(torch.arange(V, device = x.device) < size, x, torch.full_like(x, -float("inf")))
+    keep, m = _kept(x, step, bound)
+    return sample, _probs(x, keep, m, step)
 
 
-def accept(p, q, d, u, resid, bonus):
-    """The ratio test for one window (tensors, batched over a leading dim B):
-    p (B, w+1, V) target distributions, q (B, w, V) draft distributions, d (B, w) drafts,
-    u (B, w) uniforms, resid (B, w) samples of the normalized max(0, p - q) at each position,
-    bonus (B,) a sample of p at the last position.
+def window_p(logits, step, size, rand_u32):
+    """Candidate form (top-k samplers): (samples (R,), cand ids (R, K), p over them (R, K),
+    overflow (R,) bool). The kernel's kept set is a top segment of the logits, so it lies in the
+    K highest ones unless all K are kept (ties at the cutoff): then overflow is set and the
+    caller must not use p"""
+    R, V = logits.shape
+    if logits.dtype not in (torch.half, torch.float):
+        logits = logits.float()
+    logits = logits.contiguous()
+    sample, bound = _kernel(logits, step, size, rand_u32)
+    K = min(size, max(Q_MAX_K, 2 * step.top_k))
+    v, cand = torch.topk(logits[:, :size], K, dim = -1)
+    x = v.float()
+    keep, m = _kept(x, step, bound)
+    overflow = keep[:, -1] if K < size else torch.zeros(R, dtype = torch.bool, device = x.device)
+    return sample, cand, _probs(x, keep, m, step), overflow
+
+
+def accept_core(pd, qd, d, u, resid, bonus):
+    """The ratio test, batched over B windows of w drafts: accept d_i while u_i * q_i(d_i) <
+    p_i(d_i); the first rejected position emits resid, a full accept the bonus sample.
     Returns tokens (B, w+1) (valid up to n_acc inclusive) and n_acc (B,)"""
     B, w = d.shape
-    pd = torch.gather(p[:, :w], 2, d.unsqueeze(-1)).squeeze(-1)
-    qd = torch.gather(q, 2, d.unsqueeze(-1)).squeeze(-1)
     ok = u * qd < pd
     n_acc = torch.cumprod(ok.to(torch.int32), dim = 1).sum(dim = 1)
     pos = torch.arange(w + 1, device = d.device).unsqueeze(0)
@@ -233,9 +286,17 @@ def accept(p, q, d, u, resid, bonus):
     return tok, n_acc
 
 
+def accept(p, q, d, u, resid, bonus):
+    """Dense form of accept_core: p (B, w+1, V), q (B, w, V)"""
+    w = d.shape[1]
+    pd = torch.gather(p[:, :w], 2, d.unsqueeze(-1)).squeeze(-1)
+    qd = torch.gather(q, 2, d.unsqueeze(-1)).squeeze(-1)
+    return accept_core(pd, qd, d, u, resid, bonus)
+
+
 def residual_samples(p, q, g):
-    """(B, w) samples of the normalized max(0, p - q) per position (p where that is empty,
-    which only happens when p == q and so no rejection can occur)"""
+    """Dense form: (B, w) samples of the normalized max(0, p - q) per position (p where that is
+    empty, which only happens when p == q and so no rejection can occur)"""
     r = torch.clamp(p - q, min = 0.0)
     z = r.sum(dim = -1, keepdim = True)
     r = torch.where(z > 0, r, p)
@@ -243,17 +304,38 @@ def residual_samples(p, q, g):
     return torch.multinomial(r.view(B * w, V), 1, generator = g).view(B, w)
 
 
-def dense_q(qs, d, V):
-    """(w, V) draft distributions from the per-position (ids, probs), None = point mass at d"""
+def round_core(cand, pc, bonus, qi, qp, d, u, noise):
+    """One speculative-sampling round over candidate sets, batched over B windows:
+    cand, pc (B, w+1, K) target candidates and p on them, bonus (B,) a sample of the last p,
+    qi, qp (B, w, Kq) draft distributions (ids -1 = unused), d (B, w) drafts, u (B, w) and
+    noise (B, w, K) uniforms. Returns tokens (B, w+1) and n_acc (B,)"""
+    w = d.shape[1]
+    cw, pw = cand[:, :w], pc[:, :w]
+    dd = d.unsqueeze(-1)
+    pd = (pw * (cw == dd)).sum(-1)
+    qd = (qp * (qi == dd)).sum(-1)
+    qc = (qp.unsqueeze(2) * (qi.unsqueeze(2) == cw.unsqueeze(3))).sum(-1)       # q on the candidates
+    r = torch.clamp(pw - qc, min = 0.0)
+    r = torch.where(r.sum(-1, keepdim = True) > 0, r, pw)
+    resid = torch.gather(cw, 2, gumbel_pick(r, noise).unsqueeze(-1)).squeeze(-1)
+    return accept_core(pd, qd, d, u, resid, bonus)
+
+
+def pad_q(qs, d, kq = None):
+    """(w, Kq) ids and probs of the per-position draft distributions; None = point mass at d"""
     w = d.shape[0]
-    q = torch.zeros((w, V), dtype = torch.float32, device = d.device)
-    for i in range(w):
-        qi = qs[i] if i < len(qs) else None
-        if qi is None:
-            q[i, d[i]] = 1.0
-        else:
-            q[i].scatter_(0, qi[0], qi[1].float())
-    return q
+    kq = kq or Q_MAX_K
+    qi = torch.full((w, kq), -1, dtype = torch.long, device = d.device)
+    qp = torch.zeros((w, kq), dtype = torch.float32, device = d.device)
+    qi[:, 0] = d
+    qp[:, 0] = 1.0
+    for i, e in enumerate(qs[:w]):
+        if e is not None:
+            n = e[0].shape[-1]
+            qi[i, :n] = e[0]
+            qp[i, :n] = e[1]
+            qp[i, n:] = 0.0
+    return qi, qp
 
 
 def verify(gen, job, job_logits, drafts):
@@ -270,23 +352,27 @@ def verify(gen, job, job_logits, drafts):
     q_rows = job_logits.shape[1]
     w = q_rows - 1
     L = job_logits.view(q_rows, -1)
-    V = L.shape[-1]
-    size = min(V, gen.tokenizer.actual_vocab_size)
+    size = min(L.shape[-1], gen.tokenizer.actual_vocab_size)
     dev = L.device
     d = drafts.to(dev, non_blocking = True).view(w).long()
-    sample, p = fused_p(L, step, size, job.rng.randint(0, (1 << 32) - 1))
-    q = dense_q(qs, d, V)
-    g = job_generator(job, dev)
-    u = torch.rand((1, w), generator = g, device = dev)
-    resid = residual_samples(p[:w].unsqueeze(0), q.unsqueeze(0), g)
-    tok, n_acc = accept(p.unsqueeze(0), q.unsqueeze(0), d.unsqueeze(0), u, resid, sample[w:].view(1))
-    pos = torch.arange(w, device = dev)
-    match = (pos < n_acc).to(tok.dtype)
-    packed = torch.cat([tok.view(-1), match]).cpu()   # single sync
+    sample, cand, pc, overflow = window_p(L, step, size, job.rng.randint(0, (1 << 32) - 1))
+    qi, qp = pad_q(qs, d)
+    K = cand.shape[-1]
+    rnd = torch.rand((w + w * K,), generator = job_generator(job, dev), device = dev)
+    tok, n_acc = round_core(cand.unsqueeze(0), pc.unsqueeze(0), sample[w:].view(1), qi.unsqueeze(0),
+                            qp.unsqueeze(0), d.unsqueeze(0), rnd[:w].view(1, w), rnd[w:].view(1, w, K))
+    match = (torch.arange(w, device = dev) < n_acc).to(tok.dtype)
+    packed = torch.cat([tok.view(-1), match, overflow.any().view(1).to(tok.dtype)]).cpu()   # single sync
     ds = getattr(job, "_ds", None)
+    if packed[-1]:
+        # Ties filled every candidate slot: p is not known here; the fork's path samples afresh
+        # (exact with any drafts). The decision depends on the logits only, not on the draws
+        if ds:
+            ds["extra"]["spec overflow"] = ds["extra"].get("spec overflow", 0) + 1
+        return None
     if ds:
         ds["extra"]["spec rounds"] = ds["extra"].get("spec rounds", 0) + 1
-    return packed[:q_rows], packed[q_rows:].tolist()
+    return packed[:q_rows], packed[q_rows:q_rows + w].tolist()
 '''
 
 edits = {
