@@ -34,6 +34,10 @@ accept with p(d), residual p without d, i.e. the current rule. When a lookup can
 MTP draft step 0 is the argmax (a point mass too), so the lookup's MTP-agreement gate decides
 as before (a sampled step 0 disagreed more often: edit turns -3% in the engine A/B).
 
+Applies only in the thinking phase (the prompt ends inside an open <think>, until the job
+generates </think>): after it (answers, tool calls) and without thinking, sizing found only
++2.2% tokens per round, and copy-heavy output lost (edit turns -4% in the engine A/B: there p
+is sharper than the MTP head's q, so a sampled draft is accepted less often than the argmax).
 Applies to a job when its sampler is the fused kernel alone with a top-k of at most 64 (no
 active penalties, logit bias, bans or min-p; TabbyAPI's no-op penalty steps are simplified
 away; pi's requests use the qwen38 preset, top-k 20) and it has no filters,
@@ -106,6 +110,35 @@ def job_step(job):
     return st
 
 
+_think_ids = None
+
+def in_thinking(job):
+    """True while the job is in its thinking phase: the prompt ends inside an open <think> and
+    no </think> has been generated yet (checked incrementally; False is final)"""
+    global _think_ids
+    st = getattr(job, "_spec_think", None)
+    if st is False:
+        return False
+    seq = job.sequences[0].sequence_ids
+    n = len(seq)
+    if _think_ids is None:
+        tok = job.generator.tokenizer
+        _think_ids = (tok.single_id("<think>"), tok.single_id("</think>"))
+    t_open, t_close = _think_ids
+    if st is None:
+        tail = seq.torch_slice(max(n - 16, 0), n).flatten().tolist()
+        o = max((i for i, t in enumerate(tail) if t == t_open), default = -1)
+        c = max((i for i, t in enumerate(tail) if t == t_close), default = -1)
+        job._spec_think = n if o > c else False
+        return o > c
+    if n > st:
+        if bool((seq.torch_slice(st, n) == t_close).any()):
+            job._spec_think = False
+            return False
+        job._spec_think = n
+    return True
+
+
 def enabled_for(job):
     return SPEC and (not TRIAL_AB or arm(job) == "B")
 
@@ -134,6 +167,8 @@ def draft_rows(jobs):
                 job._spec_step = st
                 cfg = (st.inv_temp, st.top_k, st.top_p if st.filters & SS_Fused.F_TOPP else 1.0, job)
             job._spec_cfg = cfg
+        if cfg is not None and not in_thinking(job):
+            cfg = job._spec_cfg = None      # thinking is over: the fork's path from here on
         if cfg is None or job.new_tokens < 0:
             cfgs.append(None)
             continue

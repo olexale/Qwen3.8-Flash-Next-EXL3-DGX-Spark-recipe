@@ -281,12 +281,44 @@ def test_chain_test_detects_the_wrong_rule():
 
 # --- scope: greedy and ineligible requests keep the fork's path ---
 
-def _job(sampler, **kw):
+class _Seq:
+    """sequence_ids stand-in: a token list; ids 1 <think>, 2 </think>"""
+    def __init__(self, ids): self.ids = list(ids)
+    def __len__(self): return len(self.ids)
+    def torch_slice(self, a, b): return torch.tensor([self.ids[a:b]])
+
+
+_TOK = types.SimpleNamespace(single_id=lambda s: {"<think>": 1, "</think>": 2}[s])
+
+
+def _job(sampler, ids=(10, 11, 1), **kw):
     j = types.SimpleNamespace(sampler=sampler, filters=[], forced_ids=None, return_probs=False, return_top_tokens=0,
-                              return_logits=False, sequences=[0], new_tokens=3, serial_number=1,
-                              rng=random.Random(0), device_logit_mask=None)
+                              return_logits=False, new_tokens=3, serial_number=1,
+                              rng=random.Random(0), device_logit_mask=None,
+                              generator=types.SimpleNamespace(tokenizer=_TOK))
+    j.sequences = [types.SimpleNamespace(sequence_ids=_Seq(ids))]
     j.__dict__.update(kw)
     return j
+
+
+def test_thinking_phase_only():
+    ss._think_ids = None
+    tabby_like = ComboSampler(temperature=1.0, top_k=20, top_p=0.95)
+    old = (ss.SPEC, ss.TRIAL_AB)
+    try:
+        ss.SPEC, ss.TRIAL_AB = True, False
+        j = _job(tabby_like, ids=(10, 11, 1))                 # prompt opens <think>
+        assert ss.draft_rows([j])[0][0] is not None
+        j.sequences[0].sequence_ids.ids += [30, 31]
+        assert ss.draft_rows([j])[0][0] is not None
+        j.sequences[0].sequence_ids.ids += [32, 2, 33]        # </think> generated
+        assert ss.draft_rows([j]) is None and j._spec_cfg is None and j._spec_q is None
+        j.sequences[0].sequence_ids.ids += [1]                # a later <think> does not restart it
+        assert ss.draft_rows([j]) is None
+        assert ss.draft_rows([_job(tabby_like, ids=(10, 1, 2, 11))]) is None   # thinking off
+        assert ss.draft_rows([_job(tabby_like, ids=(10, 11))]) is None         # no markers
+    finally:
+        ss.SPEC, ss.TRIAL_AB = old
 
 
 def test_scope():
