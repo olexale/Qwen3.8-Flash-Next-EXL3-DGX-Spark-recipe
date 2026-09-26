@@ -695,6 +695,24 @@ TabbyAPI's renderer and the model's template. Through the API: a `write` of pack
 as text with its final newline, and the next turn matches the whole previous answer.
 
 
+### Prompts of k×256+1 tokens lost their last-page checkpoint (2026-09-26, fix on by default)
+
+Details: `PLAN_C_SESSION_START.md` "k×256+1 prompts". With the MTP drafter, `prepare_for_queue`
+caps the cached prefix at (len − 2) // 256 pages so prefill always runs a token. For a
+k×256+1-token prompt that leaves the last full page with a placeholder hash, which prefill never
+replaced; the checkpoint at k×256 was stored under it. So a follow-up prefilled from 0, and so
+did the same prompt sent again (real traffic: one 1,537-token prompt re-sent 5 times, 5 of 437
+logged requests).
+
+- **Shipped: `patch_exllamav3_lastpage.py`, `EXL3_LASTPAGE=1`** (image default, owner-approved):
+  the page gets its content hash when prefill completes it. Engine (`tools/lastpage_test.py`,
+  uncapped clocks): follow-up of a 1,537-token prompt resumed 0 → 1,536, TTFT 1.47 → 0.56 s;
+  of a 5,121-token prompt 0 → 5,120, 3.60 → 0.64 s. k×256 and k×256+2 prompts unchanged.
+  7 unit tests (`tests/test_lastpage.py`).
+- **Not shipped: level 2** (exact re-send resumes at k×256 with the MTP carry kept in the
+  checkpoint): 3.3 → 0.05 s, but one of two first-token checks was not bit-identical and is not
+  explained yet. Kept for later.
+
 ### Session start: anchor checkpoints (2026-09-26, Plan C C1/C2, on by default since the owner's OK)
 
 Details and tables: `PLAN_C_SESSION_START.md` "Findings (2026-09-26)". In short:

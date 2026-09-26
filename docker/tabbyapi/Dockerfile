@@ -174,6 +174,14 @@ RUN python3 /tmp/patch_exllamav3_hist_stash.py && rm /tmp/patch_exllamav3_hist_s
 COPY patch_exllamav3_conv_ckpt.py /tmp/
 RUN python3 /tmp/patch_exllamav3_conv_ckpt.py && rm /tmp/patch_exllamav3_conv_ckpt.py
 
+# With MTP, the last full page of a k*256+1-token prompt kept a placeholder hash, so
+# its K/V and the checkpoint prefill stashes after it were never found again (a
+# follow-up prefilled from 0). EXL3_LASTPAGE=1 gives the page its content hash when
+# prefill completes it (bookkeeping only; approved 2026-09-26). =2 also lets an exact
+# re-send resume there (not approved yet, see the script); 0 = the fork's behaviour.
+COPY patch_exllamav3_lastpage.py /tmp/
+RUN python3 /tmp/patch_exllamav3_lastpage.py && rm /tmp/patch_exllamav3_lastpage.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
@@ -200,6 +208,7 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_MOE_BSZN_MAX=16 \
     EXL3_HIST_STASH=1 \
     EXL3_CONV_CKPT=2 \
+    EXL3_LASTPAGE=1 \
     EXL3_PREFIX_DIAG=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \

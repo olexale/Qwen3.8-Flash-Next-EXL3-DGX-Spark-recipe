@@ -372,7 +372,7 @@ within ~10 tokens).
 Side observation, not C2's: a checkpoint the fork made at a 5,121-token prompt's last page
 (5,120) was not used by the 7,703-token prompt that followed although all of its K/V pages were
 cached (`kv-matched 7680, resumed 0`), while the same prompt resumed at 5,120 from an anchor made
-inside a longer prompt. Not investigated here.
+inside a longer prompt. Explained and fixed below ("k×256+1 prompts").
 
 **Multi-harness check** (`tools/multi_harness.py`: pi-like, Claude-Code-like with date/cwd/git
 status first in the system prompt, and a short chat, in parallel; 2 sessions × 4 turns each;
@@ -451,3 +451,63 @@ module forward and PLE take the boundary from params, the job builds the stash d
 `patch_exllamav3_hist_stash.py` does), then the greedy/needle gates. At ~0.17 s per turn (~1% of
 waiting time) this is below Plan B's ~2% line, and it is not bit-identical, so it waits for the
 owner's decision.
+
+### k×256+1 prompts: the last page lost its hash (`patch_exllamav3_lastpage.py`, `EXL3_LASTPAGE`)
+
+**Cause.** With the MTP drafter, `Job.prepare_for_queue` sets `max_cached_pages = (len − 2) //
+256` so that prefill always runs at least one prompt token (MTP takes its carry, the target's
+hidden state before the first generated position, from the last prefill row). For a prompt of
+exactly k×256+1 tokens this leaves page k−1, the last full page, out of the hashed pages. It is
+allocated with a placeholder hash, prefill fills it and splits there for the last-page checkpoint,
+and `maybe_stash_recurrent` stores the checkpoint under the placeholder. Nothing gives the page its
+content hash later (decode hashes only the pages it completes). So:
+
+- a longer prompt that contains it (a follow-up) never finds the checkpoint at k×256 and
+  resumes at the previous one, usually 0;
+- the same prompt sent again is capped at k−1 pages by the same rule, where there is no
+  checkpoint, and prefills from 0. Real traffic: a 1,537-token prompt re-sent 5 times, each
+  `kv-matched 1280, resumed 0, lost to checkpoints 1280` (5 of 437 logged requests, ~7.7k tokens
+  prefilled again).
+
+Not speculative decoding, hist-stash, pruning or the page chain: the chain is intact, only the
+one page's hash is wrong.
+
+**Engine check** (`tools/lastpage_test.py`, TabbyAPI stopped, uncapped clocks 2,405 MHz, fresh
+random prompts; levels switched at runtime in one process; `logs/bench_lastpage.log` on the Spark):
+
+| k×256+1 prompt | fork (level 0) | level 1 | level 2 |
+|---|---|---|---|
+| 1,537: after the cold run | page 5 without content hash; checkpoint at 1,536 under a placeholder | all 6 pages hashed, checkpoint at 1,536 | same, checkpoint carries the MTP state |
+| 1,537: follow-up (+300 tokens) | resumed 0, 1.47 s | resumed 1,536, 0.56 s | resumed 1,536, 0.61 s |
+| 1,537: exact re-send | resumed 0, 1.12 s | resumed 0, 1.13 s | resumed 1,536, 0.05 s |
+| 5,121: follow-up | resumed 0, 3.60 s | resumed 5,120, 0.64 s | resumed 5,120, 0.60 s |
+| 5,121: exact re-send | resumed 0, 3.24 s | resumed 0, 3.26 s | resumed 5,120, 0.05 s |
+
+Controls (k×256 and k×256+2 tokens, k = 6 and 20) behave the same at every level.
+
+**Level 1 (shipped, image default since 2026-09-26, owner-approved).** When prefill completes a
+page that still has a placeholder hash, the page gets its content hash (chained on the previous
+page, as `Sequence.prepare` computes it) before the checkpoint is stored, as `receive_sample` does
+for decoded pages. An unreferenced copy with the same hash is cleared; if a live job holds one,
+ours stays unique (switching the block table mid-prefill would change which K/V this job reads).
+The request itself computes exactly what it did before; later prompts resume at k×256, the same
+kind of split-point variation as prefix caching. 7 unit tests.
+
+**Level 2 (not shipped, for later).** The last-page checkpoint of a k×256+1 prompt also keeps the
+MTP carry (one `[1, 1, hidden]` row, host memory, outside `checkpoint_size`), and such a prompt may
+then use all k pages when that checkpoint is cached: it starts decoding at k×256 with no prefill
+forward, from the same state, K/V and carry its cold run's first decode round had. A checkpoint
+without a carry (made by another job) does not lift the cap. Findings:
+
+- Re-send TTFT 1.12 → 0.05 s (1,537 tokens) and 3.24 → 0.05 s (5,121).
+- First-token logits of the re-send vs its cold run: **bit-identical at 5,121, but not at
+  1,537** (max |d| 1.93, KL 1.9e-2; the 32 greedy tokens were identical). Not explained. The
+  guess is the first verify round's row count: the dynamic draft calibrator is global, so the
+  cold run and the re-send may draft a different number of tokens in their first round, and the
+  MoE/GEMM kernels' numerics depend on the row count. The fork's own re-sends vary the same way
+  (greedy text diverged at 6–25 tokens in several level-0 re-sends here), but that is not proof.
+- To settle it: rerun the level-2 re-sends with a fixed draft length (dynamic drafts off, or
+  drafting off) in one short window. Bit-identical logits → propose level 2; still different → a
+  restore bug, keep it off.
+- Payoff is small: in the logs so far only the 5 re-sends above (~1 s each).
+
