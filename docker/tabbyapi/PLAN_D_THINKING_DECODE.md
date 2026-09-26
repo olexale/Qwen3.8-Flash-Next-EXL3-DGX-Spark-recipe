@@ -297,4 +297,16 @@ all five prompts (400 of 400 tokens), as old vs old. Through the API (`:specsamp
 | `three_sessions.py` (100k, follow-up TTFT) | 1.76 / 1.46 / 1.39 s | 1.75 / 1.43 / 1.39 s |
 | TabbyAPI GPU memory after three sessions | 73,681 MiB | 77,531 MiB |
 
-`tests/run_tests.sh`: 81/81 on `:specsample5`. Next: D4 needs the owner's OK.
+`tests/run_tests.sh`: 81/81 on `:specsample5`.
+
+### D4: live trial (running since 2026-09-26 16:26 UTC, owner's OK)
+
+`:latest` = `:trial` (commit 2719531: image defaults `EXL3_SPEC_SAMPLE=1`, `EXL3_TRIAL_AB=1`),
+rollback `:pre-specsample` (= `:decodestats`). Started with `EXL3_PREFIX_DIAG=2` as before.
+Requests alternate by generator serial between arm A (the fork's path) and B. Three synthetic
+check requests ran at 16:26:33–16:26:55; count from 16:28 on:
+
+    { docker logs --since 2026-09-26T16:28:00Z qwen38-tabby 2>&1; } | python3 docker/tabbyapi/tools/decode_report.py
+
+(plus the `logs/qwen38-tabby-*.log` archives written by `stop_tabby.sh` after 16:28, if the
+server was restarted). Decision (D5) after 2–3 normal pi sessions, ≥ 60 thinking requests.
