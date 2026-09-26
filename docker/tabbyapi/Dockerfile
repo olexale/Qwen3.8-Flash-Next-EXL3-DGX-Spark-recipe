@@ -188,6 +188,13 @@ RUN python3 /tmp/patch_exllamav3_lastpage.py && rm /tmp/patch_exllamav3_lastpage
 COPY patch_exllamav3_decode_stats.py /tmp/
 RUN python3 /tmp/patch_exllamav3_decode_stats.py && rm /tmp/patch_exllamav3_decode_stats.py
 
+# Speculative sampling for MTP drafts (Plan D, D1): sampled drafts, ratio test, residual
+# sample on rejection; the output distribution is unchanged (tests/test_spec_sample.py).
+# Off until the owner's decision (EXL3_SPEC_SAMPLE=1 turns it on). EXL3_TRIAL_AB=1 alternates
+# requests between off (arm A) and on (arm B) for the live trial (D4).
+COPY patch_exllamav3_specsample.py /tmp/
+RUN python3 /tmp/patch_exllamav3_specsample.py && rm /tmp/patch_exllamav3_specsample.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml

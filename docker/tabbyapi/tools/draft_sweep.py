@@ -27,6 +27,12 @@ in-process variants (module globals: PLD, PLD_MAX, MIN_MATCH, BSZN = the fused d
 row limit from patch_exllamav3_bszn16.py). Load with EXL3_PLD_MAX / EXL3_MOE_BSZN_MAX at the
 largest value used, so the buffers are sized for it.
 
+VARIANTS="A:SPEC=0;B:SPEC=1" compares speculative sampling (patch_exllamav3_specsample.py) off
+and on in process; variants named A and B also label the engine's [decode-stats] lines (arm A /
+B), so `grep decode-stats logs/bench_<name>.log | python3 decode_report.py` splits thinking,
+text and tool-call tok/s per variant. Workloads tcode, tdebug and tagent are rendered with
+thinking on (the chat template's default), so most of their NTOK tokens are thinking.
+
 Env: NDTS=3,4,5,6,7  CONFS=0.4,0.5,0.6,0.7,0.8  REPS=10  NTOK=320  NTOK_LONG=1200
      WORKLOADS=code,prose,tool  PLDS=0
 """
@@ -57,6 +63,9 @@ def apply_variant(v):
         elif k == "START": G._PLD_START = int(val)
         elif k == "GATE": G._PLD_GATE = val not in ("0", 0)
         elif k == "BSZN": _bsm.MAX_BSZN = _mlpm.MAX_BSZN = int(val)
+        elif k == "SPEC":
+            import exllamav3.generator.spec_sample as _ss
+            _ss.SPEC = val not in ("0", 0); _ss.ACTIVE = _ss.SPEC or _ss.TRIAL_AB
         else: raise ValueError(k)
 import exllamav3.generator.generator as G
 print("CONFIG", f"NDTS={NDTS} CONFS={CONFS} REPS={REPS} NTOK={NTOK} WORKLOADS={WORKLOADS} PLDS={PLDS} "
@@ -164,6 +173,14 @@ PROMPTS = {
     "rewrite": _agent("Rewrite " + REAL_PATH + " with the write tool: the complete file, unchanged except that every "
                       "docstring is shortened to a single line."),
 }
+def _think(msgs, tools=None):
+    return _TPL.render(messages=msgs, tools=tools, add_generation_prompt=True)
+PROMPTS["tcode"] = _think([{"role": "user", "content": "Write a Python function that parses an nginx access log line into a dict with fields ip, timestamp, method, path, status, bytes. Include a docstring, type hints, and a short usage example."}])
+PROMPTS["tdebug"] = _think([{"role": "user", "content": "This function should return the k most frequent words, ties broken alphabetically, but the output order is sometimes wrong. Find the bug and fix it.\n\n```python\nfrom collections import Counter\n\ndef top_k_words(text: str, k: int) -> list[str]:\n    counts = Counter(text.lower().split())\n    ranked = sorted(counts.items(), key=lambda kv: (kv[1], kv[0]), reverse=True)\n    return [w for w, _ in ranked[:k]]\n```"}])
+PROMPTS["tagent"] = _think([{"role": "system", "content": "You are a coding agent working in the user's repository."},
+    {"role": "user", "content": "In " + REAL_PATH + ", make estimate() return 0.0 when no populated bin is at or below the score instead of using the nearest bin above, and rename decay_step() to age_step(). Use the edit tool."},
+    {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "read", "arguments": {"path": REAL_PATH}}}]},
+    {"role": "tool", "content": REAL}], PI_TOOLS)
 LONG = {"edit", "rewrite"}
 
 config = Config.from_directory(MODEL)
@@ -196,6 +213,7 @@ def run(gen, w, seed):
     job = Job(input_ids=ids[w], max_new_tokens=NTOK_LONG if w in LONG else NTOK,
               stop_conditions=[IM_END] if w in LONG else [],
               sampler=GreedySampler() if GREEDY else ComboSampler(temperature=1.0, top_k=20, top_p=0.95))
+    job._trial_arm = run.variant if run.variant in ("A", "B") else "-"
     gen.enqueue(job); t0 = None
     while gen.num_remaining_jobs():
         ta = time.perf_counter(); acc0 = job.accepted_draft_tokens; last_draft.clear()
