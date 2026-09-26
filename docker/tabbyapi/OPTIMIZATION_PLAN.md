@@ -739,3 +739,21 @@ Details and tables: `PLAN_C_SESSION_START.md` "Findings (2026-09-26)". In short:
   split's state. Full model: a one-forward checkpoint matches the split's where inputs match
   (layer 0) and differs elsewhere like a moved chunk boundary; first-token KL ≤ 5e-6; follow-up
   TTFT −0.17 s. Not wired in (~1%, needs approval).
+
+### Thinking decode (Plan D, 2026-09-26): per-request decode stats shipped, speculative sampling removed after a live trial
+
+Details and tables: `PLAN_D_THINKING_DECODE.md` "Findings (2026-09-26)". In short:
+
+- **Shipped: `[decode-stats]`** (`patch_exllamav3_decode_stats.py`, `EXL3_DECODE_STATS=1`,
+  log-only): per request, tokens, decode time and draft counters for thinking, answer text and
+  tool calls; `tools/decode_report.py` turns them into per-phase tok/s and A/B comparisons.
+  In the owner's sequential sessions: thinking decodes at ~56 tok/s, tool calls at ~83.
+- **Speculative sampling (D1), removed.** Sized +10.5% tokens per thinking round on synthetic
+  prompts, measured +10.2% thinking tok/s in the engine A/B (thinking only; copy-heavy output
+  lost). Live per-request A/B in five owner sessions: +3–5% tokens per thinking round, thinking
+  tok/s −0.7% (three parallel sessions) and +0.3% [−4.5, +6.0] (two sequential). Below the 5%
+  keep bar; patch, variables and tests removed.
+- **Lookup tuned for thinking (D2):** sized at ×1.004–1.006, not built.
+- **What was learned:** synthetic prompts overstate draft acceptance in thinking (63% vs 46–49%
+  in the owner's sessions), so size decode levers on real sessions' `[decode-stats]` first.
+

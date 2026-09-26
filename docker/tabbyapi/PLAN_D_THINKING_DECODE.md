@@ -310,3 +310,23 @@ check requests ran at 16:26:33–16:26:55; count from 16:28 on:
 
 (plus the `logs/qwen38-tabby-*.log` archives written by `stop_tabby.sh` after 16:28, if the
 server was restarted). Decision (D5) after 2–3 normal pi sessions, ≥ 60 thinking requests.
+
+Results (`decode_report.py` and a concurrency-aware split; tokens per round is the fair measure
+for batched requests, since rows in one round share its time):
+
+| owner sessions | requests (A/B) | thinking tok/s, pooled | thinking tokens per round | tool-call tok/s |
+|---|---:|---:|---:|---:|
+| 3 in parallel (two code reviews, a game), 16:28–16:57 | 80 / 81 | 24.7 → 24.5, −0.7% [−10.6, +12.3] | 2.60 → 2.72, +4.8% [+0.4, +9.6] | 35.2 → 37.3 (noise: batching) |
+| 2 sequential, 17:00–17:17 | 33 / 29 with thinking | 56.1 → 56.3, **+0.3% [−4.5, +6.0]** | 2.46 → 2.54, +3.3% [−3.8, +11.0] | 83.7 → 82.9, −0.9% [−7.9, +6.2] |
+
+All B requests used the new path (9,878 speculative rounds in the first phase, no fallbacks).
+Real thinking accepts 46–49% of drafts, against 63% on the synthetic prompts, and the ratio test
+added only ~3–5% tokens per round there; the ~1–2% per-round cost leaves thinking tok/s flat.
+
+### D5: reverted (2026-09-26)
+
+Below the keep bar (≥ 5% with the CI excluding 0), so `patch_exllamav3_specsample.py`, its
+Dockerfile lines, `EXL3_SPEC_SAMPLE` / `EXL3_TRIAL_AB` and `tests/test_spec_sample.py` are
+removed; the negative result is in `README.md` "Levers that are closed". `[decode-stats]` stays
+(arm `-`); `tools/spec_sample_size.py` and `tools/api_think.py` stay as measurement tools.
+

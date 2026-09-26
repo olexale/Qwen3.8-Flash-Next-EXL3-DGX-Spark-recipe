@@ -27,10 +27,9 @@ in-process variants (module globals: PLD, PLD_MAX, MIN_MATCH, BSZN = the fused d
 row limit from patch_exllamav3_bszn16.py). Load with EXL3_PLD_MAX / EXL3_MOE_BSZN_MAX at the
 largest value used, so the buffers are sized for it.
 
-VARIANTS="A:SPEC=0;B:SPEC=1" compares speculative sampling (patch_exllamav3_specsample.py) off
-and on in process; variants named A and B also label the engine's [decode-stats] lines (arm A /
-B), so `grep decode-stats logs/bench_<name>.log | python3 decode_report.py` splits thinking,
-text and tool-call tok/s per variant. Workloads tcode, tdebug and tagent are rendered with
+Variants named A and B also label the engine's [decode-stats] lines (arm A / B), so
+`grep decode-stats logs/bench_<name>.log | python3 decode_report.py` splits thinking, text and
+tool-call tok/s per variant. Workloads tcode, tdebug and tagent are rendered with
 thinking on (the chat template's default), so most of their NTOK tokens are thinking.
 
 Env: NDTS=3,4,5,6,7  CONFS=0.4,0.5,0.6,0.7,0.8  REPS=10  NTOK=320  NTOK_LONG=1200
@@ -63,9 +62,6 @@ def apply_variant(v):
         elif k == "START": G._PLD_START = int(val)
         elif k == "GATE": G._PLD_GATE = val not in ("0", 0)
         elif k == "BSZN": _bsm.MAX_BSZN = _mlpm.MAX_BSZN = int(val)
-        elif k == "SPEC":
-            import exllamav3.generator.spec_sample as _ss
-            _ss.SPEC = val not in ("0", 0); _ss.ACTIVE = _ss.SPEC or _ss.TRIAL_AB
         else: raise ValueError(k)
 import exllamav3.generator.generator as G
 print("CONFIG", f"NDTS={NDTS} CONFS={CONFS} REPS={REPS} NTOK={NTOK} WORKLOADS={WORKLOADS} PLDS={PLDS} "

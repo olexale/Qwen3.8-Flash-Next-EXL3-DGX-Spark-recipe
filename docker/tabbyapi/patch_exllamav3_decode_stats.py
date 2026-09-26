@@ -16,8 +16,9 @@ draft counters (rounds, drafted, accepted, lookup rounds) go to the phase of its
 Rounds without a draft count as rounds with 0 drafted. Tokens per second of a phase = its
 tokens / its time.
 
-"arm" is "-" unless a per-request A/B trial runs (EXL3_TRIAL_AB, Plan D, D4). No text and no
-token ids are logged, only counts and times. Nothing changes in generation.
+"arm" is "-" unless a per-request A/B trial labels the job (job._trial_arm; Plan D's D4 used
+"A"/"B", tools/draft_sweep.py labels its variants A and B). No text and no token ids are
+logged, only counts and times. Nothing changes in generation.
 
 Usage: python3 patch_exllamav3_decode_stats.py [exllamav3 package dir]
 Run once at image build time, after patch_exllamav3_pld.py and patch_exllamav3_prefix_diag.py;

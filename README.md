@@ -796,6 +796,27 @@ Tried and kept as negative results:
   1.2 calls/round at 1.9 ms; all 119 of those calls are the single 66-row
   prefill forward amortized over the rounds (`moepath.py`). Not a decode
   inefficiency.
+- **Speculative sampling for MTP drafts (Plan D, 2026-09-26; built, trialled, removed).**
+  Drafts sampled from the MTP head's q with the ratio test min(1, p/q) and a residual sample
+  on rejection, instead of argmax drafts accepted only when they equal the target's sample.
+  Distribution-exact (p read from the fused kernel's own kept set; chi-square over 3-token
+  chains, greedy output identical). Engine, synthetic thinking prompts: +10.5% tokens per
+  round sized, thinking +10.2% tok/s [95% CI +5.0, +15.8] measured; applied to thinking only,
+  because copy-heavy output lost (edit turns −4%: there the target is sharper than the draft
+  head, and the argmax wins). The owner's pi sessions (per-request A/B, `[decode-stats]`):
+  three parallel sessions, 161 requests, +4.8% tokens per thinking round [+0.4, +9.6] and
+  thinking tok/s −0.7% [−10.6, +12.3]; two sequential sessions, 62 thinking requests, +3.3%
+  tokens per round [−3.8, +11.0] and thinking tok/s **+0.3% [−4.5, +6.0]**. Real thinking
+  accepts 46–49% of drafts (63% on the synthetic prompts), the ratio test adds ~3% tokens per
+  round, and its ~1–2% per-round cost takes the rest. Below the 5% bar, so removed. Details:
+  `docker/tabbyapi/PLAN_D_THINKING_DECODE.md`.
+- *Lookup drafting tuned for thinking (Plan D, D2, sized only).* A shorter minimum match
+  inside `<think>` (4–8, ≤ 5 drafts) and a cross-request index of other requests' outputs
+  (SuffixDecoding): matches in 3–10% of thinking rounds, where MTP is already right; ×1.004–1.006.
+- *Batched verify under TabbyAPI* (side finding, not changed): TabbyAPI always adds penalty
+  steps that are no-ops, and `CustomSampler.reqs_past_ids` is computed before no-ops are
+  dropped, so the fork's batched verify never runs there; each drafted position is sampled with
+  its own launch and sync (~0.3 ms per round for 6 positions).
 
 `scripts/exl3_native/tuning/` holds the launcher, `bench.sh`, the A/B matrix
 scripts (`pubbench.sh`, `i8bench.sh`) with their logs under `logs/`, the

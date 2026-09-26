@@ -3,8 +3,8 @@
 
 Sends REPS rounds of the prompts below one at a time (thinking on, the template's default;
 the server's default sampling, i.e. the qwen38 preset), MAXTOK tokens at most. The numbers
-come from the server's [decode-stats] lines (patch_exllamav3_decode_stats.py); with
-EXL3_TRIAL_AB=1 consecutive requests alternate arms, so on the Spark host:
+come from the server's [decode-stats] lines (patch_exllamav3_decode_stats.py); on the Spark
+host:
 
   python3 docker/tabbyapi/tools/api_think.py
   docker logs --since 15m qwen38-tabby 2>&1 | python3 docker/tabbyapi/tools/decode_report.py
