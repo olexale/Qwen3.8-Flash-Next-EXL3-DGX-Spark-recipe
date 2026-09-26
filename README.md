@@ -810,6 +810,26 @@ Tried and kept as negative results:
   accepts 46–49% of drafts (63% on the synthetic prompts), the ratio test adds ~3% tokens per
   round, and its ~1–2% per-round cost takes the rest. Below the 5% bar, so removed. Details:
   `docker/tabbyapi/PLAN_D_THINKING_DECODE.md`.
+
+  *Why a small positive number is not a win here* (the owner asked; recorded so the question
+  is not re-litigated): the +3–5% is **tokens per verify round**, not time. The patch makes
+  each round ~0.5 ms (verify) + ~0.1 ms per draft step longer, ~1.5–2% of a ~43 ms round, so
+  the expected net on thinking is ~+1–2% tok/s, which is what the sequential trial measured
+  (+0.3%, CI −4.5 to +6.0). Thinking is about half of the generated tokens (in the trial,
+  tool-call tokens were as many as thinking tokens: 51.8k vs 55.0k), so that is ~0.6–0.8% of
+  the owner's total wait, ~0.3 s on a 40 s turn. Against it: ~500 lines in the engine's draft
+  and verify loops to carry through fork updates, a dependency on the fused kernel's private
+  workspace layout (a kernel change could silently break exactness), and different random
+  draws for the same seed. The tool-call −0.9% was noise (identical code after `</think>`).
+
+  *Reopen only if* one of these changes: (1) the per-round overhead goes to ~0 (a fused or
+  graph-captured draft-sample + verify), so the +3–5% per round becomes tok/s; (2) the draft
+  head changes so that `[decode-stats]` shows thinking acceptance well above 49% on real
+  sessions (the ratio test gains most where the drafter already tracks the target); (3) the
+  fork adds its own distribution-exact speculative sampling. Size any retry on real
+  `[decode-stats]` data first: synthetic thinking prompts overstated acceptance (63% vs 46–49%)
+  and the gain (+10% vs ~+1%). The last version of the patch and its tests:
+  `git show 9938c0c:docker/tabbyapi/patch_exllamav3_specsample.py` (and `tests/test_spec_sample.py`).
 - *Lookup drafting tuned for thinking (Plan D, D2, sized only).* A shorter minimum match
   inside `<think>` (4–8, ≤ 5 drafts) and a cross-request index of other requests' outputs
   (SuffixDecoding): matches in 3–10% of thinking rounds, where MTP is already right; ×1.004–1.006.

@@ -754,6 +754,9 @@ Details and tables: `PLAN_D_THINKING_DECODE.md` "Findings (2026-09-26)". In shor
   tok/s −0.7% (three parallel sessions) and +0.3% [−4.5, +6.0] (two sequential). Below the 5%
   keep bar; patch, variables and tests removed.
 - **Lookup tuned for thinking (D2):** sized at ×1.004–1.006, not built.
+- **Why not keep the small gain:** +3–5% tokens per round minus ~1.5–2% more time per round is
+  ~+1–2% thinking tok/s (~0.7% of total wait), not worth the engine patch. Reopen conditions:
+  README "Levers that are closed" and `PLAN_D_THINKING_DECODE.md` D5.
 - **What was learned:** synthetic prompts overstate draft acceptance in thinking (63% vs 46–49%
   in the owner's sessions), so size decode levers on real sessions' `[decode-stats]` first.
 

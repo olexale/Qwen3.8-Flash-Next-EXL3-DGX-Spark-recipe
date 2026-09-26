@@ -1,5 +1,11 @@
 # Track D: faster decode of thinking (weekend, 2026-09-26/27)
 
+> **Status: closed 2026-09-26.** D0 (`[decode-stats]`) shipped. D1 (speculative sampling) was
+> built, passed the engine gates (+10% thinking on synthetic prompts), and was **reverted** after
+> the live trial: +0.3% thinking tok/s [−4.5, +6.0] in the owner's sequential sessions. D2
+> (lookup for thinking) sized at ×1.00 and was not built. Do not redo either without reading
+> "Findings" and D5 below; the conditions for reopening D1 are listed there.
+
 Written 2026-09-25. Read the whole file first, then `PLAN_B_DECODE.md` (Constraints, Setup,
 Tools, "What is known", Findings) and `PLAN_C_SESSION_START.md` "What is known" (the
 per-request diagnostic). Plan B's decode work (profile, prompt lookup, 16-row MoE) is the
@@ -329,4 +335,26 @@ Below the keep bar (≥ 5% with the CI excluding 0), so `patch_exllamav3_specsam
 Dockerfile lines, `EXL3_SPEC_SAMPLE` / `EXL3_TRIAL_AB` and `tests/test_spec_sample.py` are
 removed; the negative result is in `README.md` "Levers that are closed". `[decode-stats]` stays
 (arm `-`); `tools/spec_sample_size.py` and `tools/api_think.py` stay as measurement tools.
+
+**Why the small positive per-round number was not kept** (discussed with the owner after the
+revert): tokens per round (+3.3% sequential, +4.8% parallel) is not time. Each round costs
+~1.5–2% more with the patch (~0.5 ms verify, ~0.1 ms per draft step), so the expected net is
+~+1–2% on thinking tok/s, matching the measured +0.3% [−4.5, +6.0]; the tool-call −0.9% was
+noise (identical code after `</think>`). Thinking is about half the generated tokens, so the
+effect on the owner's total wait is ~0.6–0.8% (~0.3 s per 40 s turn), too small to confirm
+without several times more trial data, and not worth ~500 engine lines that depend on the
+fused kernel's private workspace layout.
+
+**Reopen D1 only if:** the per-round overhead is removed (fused / graph-captured draft sampling
+and verify), or real-session `[decode-stats]` shows thinking acceptance well above 49% (a
+better draft head), or the fork ships its own exact speculative sampling. Size on real
+sessions first. The last patch version: `git show 9938c0c:docker/tabbyapi/patch_exllamav3_specsample.py`.
+
+**Lessons for later decode work:**
+- Synthetic prompts overstate draft acceptance in thinking (63% vs 46–49% real); size on the
+  owner's `[decode-stats]`, not on `draft_sweep.py` alone.
+- Report time (tok/s), not tokens per round, as the decision metric; per-round gains must pay
+  for their own per-round cost.
+- The owner runs several pi sessions in parallel; a per-request A/B then needs a
+  concurrency-aware analysis (tokens per round for batched requests) or sequential sessions.
 
