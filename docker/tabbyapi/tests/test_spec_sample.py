@@ -73,6 +73,9 @@ def test_round_core_residual_and_pad_q():
     dd = torch.tensor([4, 2], device=DEV)
     pi, pp = ss.pad_q([(torch.tensor([2, 5], device=DEV), torch.tensor([0.25, 0.75], device=DEV))], dd, 4)
     assert pi.tolist() == [[2, 5, -1, -1], [2, -1, -1, -1]] and pp.tolist() == [[0.25, 0.75, 0, 0], [1, 0, 0, 0]], (pi, pp)
+    e = (torch.tensor([2, 5], device=DEV), torch.tensor([0.25, 0.75], device=DEV))
+    pi, pp = ss.pad_q([e, e], dd)                                        # all sampled: stacked as is
+    assert pi.tolist() == [[2, 5], [2, 5]] and pp.tolist() == [[0.25, 0.75], [0.25, 0.75]]
 
 
 def test_q_dist_tau():
@@ -304,7 +307,7 @@ def test_greedy_rows_keep_argmax():
     ids = torch.argmax(y, dim=-1)
     job = _job(ComboSampler(temperature=1.0, top_k=20))
     params = {"spec_cfg": ([None, (1.0, 20, 1.0, job)], [None, job])}
-    out = torch.stack([ss.draft_sample(y, ids, params) for _ in range(200)])
+    out = torch.stack([ss.draft_sample(y, ids.clone(), params) for _ in range(200)])   # ids: written in place
     assert (out[:, 0] == ids[0]).all(), "a greedy row's draft must stay the argmax"
     assert params["spec_q"][0] is None and params["spec_q"][1] is not None
     top20 = set(torch.topk(y[1], 20).indices.tolist())
@@ -320,6 +323,8 @@ def test_draft_rows_and_trial_arms():
         ss.SPEC, ss.TRIAL_AB = True, False
         cfgs, jobs = ss.draft_rows([greedy, samp])
         assert cfgs[0] is None and cfgs[1][:3] == (1.0, 20, 0.95) and samp._spec_q == [] and greedy._spec_q is None
+        cfgs2, _ = ss.draft_rows([greedy, samp])                          # cached per job
+        assert cfgs2[1] is cfgs[1] and samp._spec_q == []
         assert greedy._trial_arm == "-"
         ss.SPEC, ss.TRIAL_AB = True, True
         a, b = _job(tabby_like, serial_number=4), _job(tabby_like, serial_number=5)

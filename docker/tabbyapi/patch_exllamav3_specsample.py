@@ -125,15 +125,19 @@ def draft_rows(jobs):
     for job in jobs:
         arm(job)
         job._spec_q = None
-        st = job_step(job) if enabled_for(job) else None
-        if st is None or job.new_tokens < 0:
+        cfg = getattr(job, "_spec_cfg", False)
+        if cfg is False:
+            st = job_step(job) if enabled_for(job) else None
+            cfg = None
+            if st is not None:
+                job._spec_step = st
+                cfg = (st.inv_temp, st.top_k, st.top_p if st.filters & SS_Fused.F_TOPP else 1.0, job)
+            job._spec_cfg = cfg
+        if cfg is None or job.new_tokens < 0:
             cfgs.append(None)
             continue
         job._spec_q = []
-        job._spec_step = st
-        top_k = st.top_k if st.filters & SS_Fused.F_TOPK else 0
-        top_p = st.top_p if st.filters & SS_Fused.F_TOPP else 1.0
-        cfgs.append((st.inv_temp, top_k, top_p, job))
+        cfgs.append(cfg)
     if all(c is None for c in cfgs):
         return None
     return cfgs, list(jobs)
@@ -162,9 +166,9 @@ def q_dist(y, inv_temp, top_k, top_p, tau = None):
 
 
 def gumbel_pick(pr, noise_u):
-    """Index of a categorical sample of the rows of pr (Gumbel-max on uniforms noise_u)"""
-    g = -torch.log(-torch.log(noise_u.clamp(1e-20, 1.0 - 1e-7)))
-    return torch.argmax(torch.log(pr) + g, dim = -1)
+    """Index of a categorical sample of the rows of pr (unnormalized is fine) from uniforms:
+    argmax pr / -log u, the Gumbel-max trick (log pr - log(-log u)) without the logs"""
+    return torch.argmax(pr / -torch.log(noise_u.clamp(1e-30, 1.0 - 1e-7)), dim = -1)
 
 
 def draft_sample(y, ids, params):
@@ -172,7 +176,6 @@ def draft_sample(y, ids, params):
     params["spec_q"] (None for argmax rows). y: (rows, vocab') head logits, ids: (rows,)"""
     cfgs, _ = params["spec_cfg"]
     out = []
-    ids = ids.clone()
     for row, cfg in enumerate(cfgs):
         if cfg is None:
             out.append(None)
@@ -227,17 +230,25 @@ def _kept(x, step, bound):
     if bound is None:
         return keep, torch.where(keep, x, torch.full_like(x, -float("inf"))).max(dim = -1, keepdim = True).values
     m, kb, ks = bound
-    scale = (torch.tensor(float(HIST_BUCKETS) / HIST_RANGE, dtype = torch.float32) *
-             torch.tensor(step.inv_temp_filter, dtype = torch.float32)).item()
+    scale = _consts(step)[0]
     db = (m - x) * scale
     b = torch.clamp(db, max = float(HIST_BUCKETS - 1)).to(torch.int32)
     s = torch.clamp(torch.trunc((db - b.float()) * float(HIST_BUCKETS)), 0.0, float(HIST_BUCKETS - 1)).to(torch.int32)
     return keep & ((x == m) | (b < kb) | ((b == kb) & (s <= ks))), m
 
 
+def _consts(step):
+    """fp32 values of the kernel's bin scale (FS_NB / FS_HIST_RANGE * inv_temp_filter) and inv_temp"""
+    c = getattr(step, "_spec_consts", None)
+    if c is None:
+        f32 = lambda v: torch.tensor(v, dtype = torch.float32)
+        c = step._spec_consts = ((f32(float(HIST_BUCKETS) / HIST_RANGE) * f32(step.inv_temp_filter)).item(),
+                                 f32(step.inv_temp).item())
+    return c
+
+
 def _probs(x, keep, m, step):
-    w = torch.where(keep, torch.exp((x - m) * float(torch.tensor(step.inv_temp, dtype = torch.float32))),
-                    torch.zeros_like(x))
+    w = torch.where(keep, torch.exp((x - m) * _consts(step)[1]), torch.zeros_like(x))
     return w / w.sum(dim = -1, keepdim = True)
 
 
@@ -324,6 +335,9 @@ def round_core(cand, pc, bonus, qi, qp, d, u, noise):
 def pad_q(qs, d, kq = None):
     """(w, Kq) ids and probs of the per-position draft distributions; None = point mass at d"""
     w = d.shape[0]
+    qs = qs[:w]
+    if len(qs) == w and w and all(e is not None for e in qs) and len({e[0].shape[-1] for e in qs}) == 1:
+        return torch.stack([e[0] for e in qs]), torch.stack([e[1] for e in qs])
     kq = kq or Q_MAX_K
     qi = torch.full((w, kq), -1, dtype = torch.long, device = d.device)
     qp = torch.zeros((w, kq), dtype = torch.float32, device = d.device)
