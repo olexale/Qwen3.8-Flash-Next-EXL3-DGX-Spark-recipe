@@ -165,6 +165,14 @@ RUN python3 /tmp/patch_exllamav3_prefix_diag.py && rm /tmp/patch_exllamav3_prefi
 COPY patch_exllamav3_hist_stash.py /tmp/
 RUN python3 /tmp/patch_exllamav3_hist_stash.py && rm /tmp/patch_exllamav3_hist_stash.py
 
+# Anchor checkpoints: also stash the recurrent state at the page boundary before the
+# latest user message (EXL3_CONV_CKPT=1) and, with =2, at the end of a long prefix
+# shared with a recent different prompt (a new session with the same system prompt),
+# in a separate LRU of EXL3_CONV_CKPT_MAX entries. Moves prefill split points only;
+# off by default.
+COPY patch_exllamav3_conv_ckpt.py /tmp/
+RUN python3 /tmp/patch_exllamav3_conv_ckpt.py && rm /tmp/patch_exllamav3_conv_ckpt.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml

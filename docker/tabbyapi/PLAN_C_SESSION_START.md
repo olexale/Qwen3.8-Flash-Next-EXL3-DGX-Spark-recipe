@@ -289,3 +289,125 @@ As in Plan B: README "What to expect" and the `EXL3_*` table, a dated section in
 session in `[prefix-diag]`: turn 2 `lost to checkpoints 0` (C2a); with C2b on, turn 1 of a
 repeat session resumes at the shared prefix. Also check the anchor counters: checkpoints made
 but never reused should stay low.
+
+
+## Findings (2026-09-26)
+
+Clocks were uncapped all day (2,405–2,444 MHz, the owner's `nvidia-smi -rgc`); every
+before/after pair below ran in that state.
+
+### C1: what changes between turn 1 and turn 2, and whether pi's prefix repeats
+
+**`EXL3_PREFIX_DIAG=2`** (`patch_exllamav3_prefix_diag.py`, log-only, lengths and classes only)
+adds a `diverge at L: msg #k role R +o, first user prev/new, last user prev/new | prev tail T at
+new +d | classes ...` line and a `session start #n ... shared with #m S tokens` line (page hashes
+of the last 64 session starts, no ids). 5 unit tests.
+
+- **Not the chat template.** It renders every user message the same way whether or not an
+  assistant turn follows, and `preserve_thinking` defaults to on.
+- **Not pi's core or `project_report`.** Non-interactive pi (`pi -p --no-session`, the owner's
+  extensions loaded) in an empty directory and in a clone of this repo, with and without a
+  `project_report` call: turn 2 matched all of turn 1 every time (`lcp out+158`).
+- **In the owner's own sessions it is the first user message, and only in some sessions.**
+  Session files, lengths only: in the same project (qwen-image), with identical system-prompt
+  section lengths, the 09-24 18:55 and 09-25 11:22 sessions had turn 1 = 5,205–5,209 tokens
+  and turn 2 resumed at 5,120, while the 09-25 13:58 and 14:56 sessions had turn 1 = 5,403
+  tokens for a 149-character user message (~35 tokens) and turn 2 prefilled from 0. So ~180
+  tokens were in turn 1's user message that are neither in the session file nor sent again on
+  turn 2. The divergence (5,187) sits just past that message's `<|im_start|>user`. That is the
+  plan's first candidate (pi adds something to the latest user message on turn 1 only), from
+  the interactive session (an extension or the TUI), not reproducible with `-p`. The server
+  runs `EXL3_PREFIX_DIAG=2` now, so the owner's next interactive pi session logs the exact
+  offset and whether the old tail moved.
+- **pi's prefix repeats across sessions.** Diag level 2 on real pi runs: sessions in
+  *different* projects share the prompt up to the working-directory line, 4,862 tokens (4,608
+  page-aligned) of the ~5,244 before the first user message; sessions in the *same* project
+  share everything up to the first user message (and a repeat session already resumes at turn
+  1's last page when the user message starts after it: 5,120 of 5,273). So C2b is worth doing.
+
+### C2: anchor checkpoints (`patch_exllamav3_conv_ckpt.py`, `EXL3_CONV_CKPT`, off by default)
+
+`EXL3_CONV_CKPT=1` (C2a): while prefilling, also split at the page boundary at or before the
+latest user message (the last `<|im_start|>user` that is not a tool response nor quoted inside
+one) and stash there, in the ordinary LRU. `=2` adds C2b: split and stash at the end of a
+≥ `EXL3_CONV_CKPT_MIN` (2,048) full-page prefix shared with a recent *different* prompt (one it
+does not extend; the last 32 prompts' page hashes), in a separate LRU of `EXL3_CONV_CKPT_MAX`
+(4) entries that does not count against `sysmem_recurrent_cache` and that the ordinary LRU never
+evicts. An anchor is only used past the resumed position, before the prompt's last page boundary
+(the fork stashes that one anyway), and when not stashed yet; two sessions reaching the same
+anchor keep one entry. With `EXL3_PREFIX_DIAG` the log shows `anchor made a|b at P` and the
+counters (made, reused, evicted unused). 9 unit tests.
+
+**Synthetic pi-like start** (`tools/session_start.py`: a fresh nonce-prefixed ~5k-token
+system prompt with the cwd ~380 tokens before its end and four pi tools; turn 1's user message
+carries a ~180-token block that turn 2 does not; median of 3 reps, TTFT):
+
+| | without | `EXL3_CONV_CKPT=2` |
+|---|---:|---:|
+| session 1, turn 1 (cold) | 4.07 s | 4.53 s (one extra forward) |
+| **session 1, turn 2** | 5.15 s | **2.57 s** (resumes at the C2a anchor) |
+| session 2 turn 1, same project | 0.48 s | 0.51 s |
+| session 3 turn 1, second project | 3.84 s | 4.49 s (makes the C2b anchor) |
+| **session 4 turn 1, third project** | 3.83 s | **1.29 s** (resumes at it) |
+
+Targets: turn 2 ≤ 3 s is met (2.6 s; the owner's turn 2 was 6.3 s at the capped clock).
+Turn 1 ≤ 1 s from the third session with the same prefix is not quite: 1.29 s, because the
+cross-project prefix ends ~640 tokens before the end of the prompt (cwd, the rest of pi's
+system prompt, the task); in the same project the repeat session is 0.5 s.
+
+**Engine checks** (`tools/conv_ckpt_test.py`, TabbyAPI stopped): turn 2 resumes at 5,120
+(2.0 s vs 4.9 s cold); a prompt that diverges before every anchor resumes at 0 (no wrong
+restore); a sibling of it resumes at its C2b anchor (1.6 s vs 3.3 s); two sessions enqueued
+together reach the same new anchor and the separate LRU stays consistent. Cold prefill is
+deterministic (cold vs cold: first-token logits bit-identical), and a resumed prompt differs
+from a cold one like any other change of split points: first-token KL 1e-4 to 0.6 on these
+random-text prompts (top-1 equal in 9 of 10), against KL 1.7–3.1 between two different
+prompts. The right reference is a cold prefill whose first chunk ends at the anchor (the same
+forward shapes as resuming there, as the engine's 8,192-token chunking does on long prompts):
+against it the resumed prompt's first-token logits are bit-identical in conversation 1 (both
+prompts) and within KL 7e-4, top-10 identical, in conversation 0. So C2 changes outputs exactly
+as moving a chunk boundary does. Greedy text is too noisy here to judge (cold vs cold diverges
+within ~10 tokens).
+
+Side observation, not C2's: a checkpoint the fork made at a 5,121-token prompt's last page
+(5,120) was not used by the 7,703-token prompt that followed although all of its K/V pages were
+cached (`kv-matched 7680, resumed 0`), while the same prompt resumed at 5,120 from an anchor made
+inside a longer prompt. Not investigated here.
+
+**Multi-harness check** (`tools/multi_harness.py`: pi-like, Claude-Code-like with date/cwd/git
+status first in the system prompt, and a short chat, in parallel; 2 sessions × 4 turns each;
+3 seeds; fresh server per arm):
+
+- **Resumes:** requests with `lost to checkpoints` > 0: 16 → 8. The 8 left are the 512-token
+  tool header shared across harnesses on each turn 1, the same in both arms. pi's turn 2 and
+  its second session (5.4–6.4k tokens lost each without the patch) now resume.
+- **Anchors:** 3, all C2a on pi's turn 1. The per-session-changing harness made none and
+  paid no extra forward; no C2b was made (the only repeated long prefix was already covered
+  by C2a).
+- **Speed:** summed TTFT 206 → 193 s; decode means per harness 27.1 / 23.9 / 22.7 → 27.6 /
+  26.2 / 27.2 tok/s (run-to-run spread is ±30% in parallel runs, so this only says no
+  systematic loss). The one real cost: a request running alongside a pi turn 1 that makes an
+  anchor waits for its extra forward, +0.06–0.4 s on ~8 s turn-1 requests (1–4%).
+- **Memory:** TabbyAPI's peak GPU memory 76.4 vs 77.4 GiB after three seeds (it grows seed by
+  seed in both arms as the recurrent cache fills). Fresh-server `three_sessions.py`: 72,995 vs
+  72,899 MiB (+96 MiB, one checkpoint; budget +4 × 112 MiB), system 80.1 vs 79.7 GiB, no lost
+  checkpoints in either arm.
+
+**Known limitation:** TabbyAPI encodes chat markers inside message text as special tokens. A
+chat marker quoted in a *user* message (not a tool result) looks like a message start, and
+makes an anchor that nobody reuses: in `three_sessions.py`, whose filler quotes chat-format
+examples, 5 such anchors cost +0.28/+0.35 s on 2 of 6 follow-ups. Markers inside tool results
+are skipped.
+
+**Not shipped as default:** split points move, so outputs are not bit-identical to before
+(the same kind of variation prefix caching already causes). Needs the owner's OK.
+
+### C3: one forward instead of two (sized, not started)
+
+FLA's chunked kernel (`vendor/fla/chunk_delta_h.py`) keeps the running state in fp32
+registers but stores the per-chunk states `h` in the input dtype (bf16), and only the final
+state in fp32. So a checkpoint taken from `h[(b - start) / 64]` would be bf16-rounded where the
+split stores fp32: not the bit-identical state the plan expected. It needs an extra fp32 store
+at one chunk index in the Triton kernel (small), plus the conv windows from the pre-conv
+inputs, the PLE state and the job plumbing, then parity and gates, for ~0.2 s per follow-up
+(~1% of waiting time).

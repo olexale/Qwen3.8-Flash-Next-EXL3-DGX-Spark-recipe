@@ -694,3 +694,27 @@ failing on the old image, all passing on the new, including a byte-exact round t
 TabbyAPI's renderer and the model's template. Through the API: a `write` of package.json arrives
 as text with its final newline, and the next turn matches the whole previous answer.
 
+
+### Session start: anchor checkpoints (2026-09-26, Plan C C1/C2, off until approved)
+
+Details and tables: `PLAN_C_SESSION_START.md` "Findings (2026-09-26)". In short:
+
+- **Why pi's turn 2 re-prefilled everything:** in some interactive sessions (not reproducible
+  with `pi -p`) turn 1's first user message carried ~180 tokens that turn 2 no longer sends,
+  so turn 2 diverged just past that message's start, before turn 1's only checkpoint.
+  `EXL3_PREFIX_DIAG=2` (log-only) now logs the divergence's message, offset and token classes,
+  and the prefix each session start shares with earlier ones.
+- **pi's prompt repeats across sessions:** up to the working-directory line (~4.9k tokens)
+  across projects, up to the first user message within a project.
+- **`patch_exllamav3_conv_ckpt.py`** (`EXL3_CONV_CKPT=1|2`, default 0): a checkpoint at the page
+  boundary before the latest user message (C2a), and with `2` one at the end of a ≥2,048-token
+  prefix shared with a recent different prompt, in its own 4-entry LRU (C2b). Through the API
+  (uncapped clocks): turn 2 5.15 → 2.57 s, turn 1 of the third session in a new project
+  3.83 → 1.29 s; turn 1 pays one extra forward (+0.3–0.6 s). Multi-harness (pi-like,
+  Claude-Code-like, chat in parallel): lost-checkpoint requests 16 → 8, no anchors from the
+  per-session-changing harness, memory within budget (fresh `three_sessions.py` +96 MiB).
+  Moves prefill split points, so it is not bit-identical to an unchunked prefill; against a cold
+  prefill chunked at the anchor the first-token logits are bit-identical (or KL ≤ 7e-4).
+  Awaiting the owner's OK.
+- **C3 sized:** FLA stores per-chunk states in bf16; a single-forward last-page checkpoint needs
+  an fp32 store added to the Triton kernel before parity can hold.
