@@ -30,8 +30,9 @@ max(0, p_i - q_i) (normalized); if every draft is accepted, the kernel's own sam
 last position is the bonus token. One device-to-host copy per round.
 
 Prompt-lookup drafts (patch_exllamav3_pld.py) are point masses (q = 1 at the drafted token):
-accept with p(d), residual p without d, i.e. the current rule. In a gated lookup round the
-first position was drawn from the MTP head's q and keeps it.
+accept with p(d), residual p without d, i.e. the current rule. When a lookup candidate exists,
+MTP draft step 0 is the argmax (a point mass too), so the lookup's MTP-agreement gate decides
+as before (a sampled step 0 disagreed more often: edit turns -3% in the engine A/B).
 
 Applies to a job when its sampler is the fused kernel alone with a top-k of at most 64 (no
 active penalties, logit bias, bans or min-p; TabbyAPI's no-op penalty steps are simplified
@@ -175,6 +176,11 @@ def draft_sample(y, ids, params):
     """Replace the argmax draft ids of sampling rows by a sample of q; keep q per row in
     params["spec_q"] (None for argmax rows). y: (rows, vocab') head logits, ids: (rows,)"""
     cfgs, _ = params["spec_cfg"]
+    if params.get("spec_point"):
+        # A round with a prompt-lookup candidate: draft step 0 stays the argmax (a point mass),
+        # so the MTP-agreement gate of patch_exllamav3_pld.py sees what it always did
+        params["spec_q"] = [None] * len(cfgs)
+        return ids
     out = []
     for row, cfg in enumerate(cfgs):
         if cfg is None:
@@ -467,6 +473,7 @@ edits = {
          "                params[\"export_draft_conf\"] = True\n"
          "            if spec_rows is not None:\n"
          "                params[\"spec_cfg\"] = spec_rows\n"
+         "                params[\"spec_point\"] = idx == 0 and pld_gate is not None\n"
          "            batch_state = self.draft_model.forward(batch_ids, params)\n"
          "            lm_head = self.model.modules[self.model.logit_layer_idx]\n"
          "            batch_state = lm_head.prepare_for_device(batch_state, params)\n"

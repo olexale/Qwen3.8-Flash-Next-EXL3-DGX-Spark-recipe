@@ -310,6 +310,10 @@ def test_greedy_rows_keep_argmax():
     out = torch.stack([ss.draft_sample(y, ids.clone(), params) for _ in range(200)])   # ids: written in place
     assert (out[:, 0] == ids[0]).all(), "a greedy row's draft must stay the argmax"
     assert params["spec_q"][0] is None and params["spec_q"][1] is not None
+    # a round with a prompt-lookup candidate: step 0 keeps every row's argmax, as a point mass
+    pp = dict(params, spec_point=True)
+    o = ss.draft_sample(y, ids.clone(), pp)
+    assert torch.equal(o, ids) and pp["spec_q"] == [None, None]
     top20 = set(torch.topk(y[1], 20).indices.tolist())
     assert set(out[:, 1].tolist()) <= top20 and len(set(out[:, 1].tolist())) > 1
 
