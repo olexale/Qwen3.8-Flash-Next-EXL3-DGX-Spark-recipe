@@ -154,7 +154,8 @@ RUN python3 /tmp/patch_exllamav3_pld.py && rm /tmp/patch_exllamav3_pld.py
 
 # Prefix-reuse diagnostic: one log line per request on how much of the cached
 # prefix was resumed and why the rest was prefilled again (lengths only, no
-# text). Log-only; EXL3_PREFIX_DIAG=1 turns it on, off by default.
+# text). Log-only, on (EXL3_PREFIX_DIAG=1, since 2026-09-26: it also reports whether anchor
+# checkpoints get reused); 2 adds divergence details, 0 turns it off.
 COPY patch_exllamav3_prefix_diag.py /tmp/
 RUN python3 /tmp/patch_exllamav3_prefix_diag.py && rm /tmp/patch_exllamav3_prefix_diag.py
 
@@ -198,7 +199,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_PLD_MAX=11 \
     EXL3_MOE_BSZN_MAX=16 \
     EXL3_HIST_STASH=1 \
-    EXL3_CONV_CKPT=2
+    EXL3_CONV_CKPT=2 \
+    EXL3_PREFIX_DIAG=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
