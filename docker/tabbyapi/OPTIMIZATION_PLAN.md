@@ -695,7 +695,7 @@ TabbyAPI's renderer and the model's template. Through the API: a `write` of pack
 as text with its final newline, and the next turn matches the whole previous answer.
 
 
-### Session start: anchor checkpoints (2026-09-26, Plan C C1/C2, off until approved)
+### Session start: anchor checkpoints (2026-09-26, Plan C C1/C2, on by default since the owner's OK)
 
 Details and tables: `PLAN_C_SESSION_START.md` "Findings (2026-09-26)". In short:
 
@@ -715,7 +715,7 @@ Details and tables: `PLAN_C_SESSION_START.md` "Findings (2026-09-26)". In short:
   per-session-changing harness, memory within budget (fresh `three_sessions.py` +96 MiB).
   Moves prefill split points, so it is not bit-identical to an unchunked prefill; against a cold
   prefill chunked at the anchor the first-token logits are bit-identical (or KL ≤ 7e-4).
-  Awaiting the owner's OK.
+  The owner approved it on 2026-09-26; `EXL3_CONV_CKPT=2` is the image default.
 - **C3 parity:** FLA stores per-chunk states in bf16, so `patch_exllamav3_fla_capture.py` (not in
   the image) adds an fp32 capture at one chunk; on identical inputs it is bit-identical to the
   split's state. Full model: a one-forward checkpoint matches the split's where inputs match

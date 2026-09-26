@@ -325,7 +325,7 @@ of the last 64 session starts, no ids). 5 unit tests.
   share everything up to the first user message (and a repeat session already resumes at turn
   1's last page when the user message starts after it: 5,120 of 5,273). So C2b is worth doing.
 
-### C2: anchor checkpoints (`patch_exllamav3_conv_ckpt.py`, `EXL3_CONV_CKPT`, off by default)
+### C2: anchor checkpoints (`patch_exllamav3_conv_ckpt.py`, `EXL3_CONV_CKPT`, default 2 since the owner's OK)
 
 `EXL3_CONV_CKPT=1` (C2a): while prefilling, also split at the page boundary at or before the
 latest user message (the last `<|im_start|>user` that is not a tool response nor quoted inside
@@ -399,8 +399,9 @@ makes an anchor that nobody reuses: in `three_sessions.py`, whose filler quotes 
 examples, 5 such anchors cost +0.28/+0.35 s on 2 of 6 follow-ups. Markers inside tool results
 are skipped.
 
-**Not shipped as default:** split points move, so outputs are not bit-identical to before
-(the same kind of variation prefix caching already causes). Needs the owner's OK.
+**Default since 2026-09-26:** split points move, so outputs are not bit-identical to before
+(the same kind of variation prefix caching already causes); the owner approved `EXL3_CONV_CKPT=2`
+as the image default after the real-traffic check below.
 
 ### Real traffic with `EXL3_CONV_CKPT=2` (2026-09-26, owner approved enabling it)
 

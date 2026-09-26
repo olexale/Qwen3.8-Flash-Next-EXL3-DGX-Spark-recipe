@@ -168,8 +168,8 @@ RUN python3 /tmp/patch_exllamav3_hist_stash.py && rm /tmp/patch_exllamav3_hist_s
 # Anchor checkpoints: also stash the recurrent state at the page boundary before the
 # latest user message (EXL3_CONV_CKPT=1) and, with =2, at the end of a long prefix
 # shared with a recent different prompt (a new session with the same system prompt),
-# in a separate LRU of EXL3_CONV_CKPT_MAX entries. Moves prefill split points only;
-# off by default.
+# in a separate LRU of EXL3_CONV_CKPT_MAX entries. Moves prefill split points only
+# (as prefill chunking does); on (=2, approved 2026-09-26), EXL3_CONV_CKPT=0 turns it off.
 COPY patch_exllamav3_conv_ckpt.py /tmp/
 RUN python3 /tmp/patch_exllamav3_conv_ckpt.py && rm /tmp/patch_exllamav3_conv_ckpt.py
 
@@ -197,7 +197,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_PLD=1 \
     EXL3_PLD_MAX=11 \
     EXL3_MOE_BSZN_MAX=16 \
-    EXL3_HIST_STASH=1
+    EXL3_HIST_STASH=1 \
+    EXL3_CONV_CKPT=2
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
