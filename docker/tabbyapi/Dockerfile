@@ -190,8 +190,8 @@ RUN python3 /tmp/patch_exllamav3_decode_stats.py && rm /tmp/patch_exllamav3_deco
 
 # Speculative sampling for MTP drafts (Plan D, D1): sampled drafts, ratio test, residual
 # sample on rejection; the output distribution is unchanged (tests/test_spec_sample.py).
-# Off until the owner's decision (EXL3_SPEC_SAMPLE=1 turns it on). EXL3_TRIAL_AB=1 alternates
-# requests between off (arm A) and on (arm B) for the live trial (D4).
+# Live trial since 2026-09-26 (owner's OK): EXL3_SPEC_SAMPLE=1 with EXL3_TRIAL_AB=1 alternates
+# requests between off (arm A) and on (arm B); D5 makes it permanent or removes it.
 COPY patch_exllamav3_specsample.py /tmp/
 RUN python3 /tmp/patch_exllamav3_specsample.py && rm /tmp/patch_exllamav3_specsample.py
 
@@ -223,7 +223,9 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_CONV_CKPT=2 \
     EXL3_LASTPAGE=1 \
     EXL3_PREFIX_DIAG=1 \
-    EXL3_DECODE_STATS=1
+    EXL3_DECODE_STATS=1 \
+    EXL3_SPEC_SAMPLE=1 \
+    EXL3_TRIAL_AB=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \
