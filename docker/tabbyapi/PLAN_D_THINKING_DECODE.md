@@ -210,3 +210,91 @@ Either way `[decode-stats]` stays (D0), with `arm -`.
 
 After D5: README, `OPTIMIZATION_PLAN.md` "Results" (dated; sizing numbers, trial table, the
 decision), commit, push, pull on the Spark, and a short summary to the owner with the numbers.
+
+## Findings (2026-09-26)
+
+All numbers at uncapped clocks (2,405–2,411 MHz, `nvidia-smi --query-gpu=clocks.sm` before
+each window), engine runs with TabbyAPI stopped.
+
+### D0: `[decode-stats]` (shipped, `:latest` = `:decodestats`, rollback `:pre-decodestats`)
+
+`patch_exllamav3_decode_stats.py` (`EXL3_DECODE_STATS=1`), `tools/decode_report.py`,
+`tests/test_decode_stats.py`. The per-request line splits tokens, time and draft counters into
+thinking (up to `</think>`), text and tool call (from the first `<tool_call>`); a round's time
+is split over its tokens' phases. Live check: 116 tokens in 2.07 s, TabbyAPI's own line said
+56.1 T/s. First live request: thinking accepted 43% of drafts, the tool call 87%.
+
+### D1 sizing (`tools/spec_sample_size.py`)
+
+What the code does: MTP drafts are the argmax of a 64K-column head slice, and the verify keeps
+a draft only if the target's own sample (fused kernel: temperature, top-k, top-p, Gumbel) equals
+it, so acceptance is p(d). TabbyAPI always adds no-op penalty steps, which leaves
+`CustomSampler.reqs_past_ids` true, so the fork's batched verify never runs: every position is
+sampled with its own launch and sync (a side finding; ~0.3 ms per round).
+
+Synthetic prompts, thinking on, 7 prompts x 2 (then 10 prompts incl. thinking-off), expected
+tokens per verify round from p and q at every drafted position (predicted 2.061 vs measured
+2.087, so the model is right):
+
+| thinking | current (p(argmax q)) | sampled q + ratio test |
+|---|---:|---:|
+| acceptance at draft position 0 | 0.593 | 0.741 |
+| tokens per round, deployed dynamic windows | 2.061–2.085 | 2.281–2.304 (+10.5–10.7%) |
+| best fixed window (pass 2, by measured round cost) | 2 drafts, 47.9 tok/s | 3 drafts, 56.7 tok/s |
+| after `</think>` / thinking off | 3.299 | 3.370 (+2.2%) |
+
+q at the target's temperature (1.0) is best (0.8: +9.8%, 0.6: +7.9%); a point mass at the
+argmax where q is confident (tau) only lowers the gain (tau 0.9: +10.5%, 0.5: +6.2%).
+
+### D2 (closed, not built)
+
+Offline on the same runs (a lookup draft accepted up to its common prefix with what was
+actually sampled; gated on the MTP head's first token; measured round costs):
+
+| thinking rounds | match | used (gate) | est. thinking tok/s |
+|---|---:|---:|---:|
+| phase-aware min match 4 / 5 / 6 / 8, <= 5 drafts | 7.2 / 5.2 / 4.6 / 3.1% | 5.7 / 4.3 / 3.9 / 2.9% | x1.005 / 1.005 / 1.006 / 1.004 |
+| + cross-request index (other prompts' outputs) | +1.2–2.3% | | x1.004–1.005 |
+
+Matches land where MTP is already right, so both are below the 3% bar. In real sessions the
+deployed lookup's thinking rounds are counted by `[decode-stats]` (`thinking ... lookup L`).
+
+### D1 build (`patch_exllamav3_specsample.py`, `EXL3_SPEC_SAMPLE`, `EXL3_TRIAL_AB`)
+
+Draft d ~ q (the head slice at the job's temperature, top-k, top-p), verify with the ratio
+test, residual max(0, p - q) on rejection, the kernel's own sample of the last position as the
+bonus token, one readback per round. p is exactly the kernel's: its histogram workspace holds
+the max logit and the kept-set bound per row, and the kept set is recomputed with the same fp32
+binning (`tests/test_spec_sample.py`: equal to a tie-aware eager reference, chi-square against
+the kernel's samples). Chi-square over 300k 3-token chains (toy model, prefix-dependent p and a
+different q, with top-k/top-p, a lookup point-mass position, tau point masses): z −0.37 / 0.44 /
+0.22 / −0.42; the same harness with a wrong rule gives z 186–378.
+
+Engine A/B (`draft_sweep.py VARIANTS="A:SPEC=0;B:SPEC=1"`, 10 reps, in process), per build:
+
+| build | thinking pooled (CI) | code | prose | edit | cost per round |
+|---|---:|---:|---:|---:|---|
+| 1 (p over the whole vocabulary) | +8.8% [+4.3, +13.3] | −7.9% | +3% | −3.9% | +~2 ms |
+| 2 (p on the top candidates) | +8.8% [+3.7, +13.7] | −0.8% | −2.0% | −1.0% | +0.8–1.6 ms |
+| 3 (fewer launches) | +10.2% [+4.0, +16.5] | −0.5% | +1.5% | −3.1% | |
+| 4 (argmax step 0 with a lookup candidate) | | | | −4.4% (accept 94 → 90%) | |
+| **5 (thinking phase only)** | **+10.2% [+5.0, +15.8]** | identical path | identical path | −0.1% | |
+
+Edits lost because in copy-heavy output p is sharper than the MTP head's q (p(a) = 0.99 with
+q(a) = 0.8 accepts 0.8 by the ratio test, 0.99 by the argmax), so build 5 applies only while the
+job is thinking; tcode +14.6%, tdebug +12.0% (median tok/s, mostly thinking).
+
+Gates on build 5: `greedy_ab.py` (AGENT=1): old vs new with `EXL3_SPEC_SAMPLE=1` identical on
+all five prompts (400 of 400 tokens), as old vs old. Through the API (`:specsample5` with
+`EXL3_SPEC_SAMPLE=1 EXL3_TRIAL_AB=1` vs `:latest`, same clocks, one after the other):
+
+| | candidate | `:latest` |
+|---|---:|---:|
+| `api_think.py` REPS=6 (per-arm, `[decode-stats]`) | B vs A thinking +9.9% pooled [−0.8, +22.3], 2.15 → 2.54 tokens per round, spec rounds in every B request, no overflow | |
+| `concurrent_decode.py` N=1 / N=3 | 55.7 [49.6–61.3] / 68.8 [66.9–73.9] | 57.6 [49.2–64.2] / 70.8 [68.4–73.5] |
+| `api_edit.py` edit / rewrite | 118.4 / 151.1 | 118.5 / 152.0 |
+| `api_bench.py` cold 24k / follow-up TTFT | 16.57 / 1.15 s | 16.59 / 1.15 s |
+| `three_sessions.py` (100k, follow-up TTFT) | 1.76 / 1.46 / 1.39 s | 1.75 / 1.43 / 1.39 s |
+| TabbyAPI GPU memory after three sessions | 73,681 MiB | 77,531 MiB |
+
+`tests/run_tests.sh`: 81/81 on `:specsample5`. Next: D4 needs the owner's OK.

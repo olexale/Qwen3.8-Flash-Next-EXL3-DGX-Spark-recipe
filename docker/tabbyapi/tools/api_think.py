@@ -36,8 +36,8 @@ def one(prompt):
     req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
     t0 = time.time()
     with urllib.request.urlopen(req, timeout=600) as r:
-        u = json.load(r)["usage"]
-    return u["completion_tokens"], time.time() - t0
+        u = json.load(r).get("usage") or {}
+    return u.get("completion_tokens", "?"), time.time() - t0
 
 
 for rep in range(REPS):
