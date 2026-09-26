@@ -182,6 +182,12 @@ RUN python3 /tmp/patch_exllamav3_conv_ckpt.py && rm /tmp/patch_exllamav3_conv_ck
 COPY patch_exllamav3_lastpage.py /tmp/
 RUN python3 /tmp/patch_exllamav3_lastpage.py && rm /tmp/patch_exllamav3_lastpage.py
 
+# One [decode-stats] line per request: tokens and time of the thinking phase, the answer
+# text and the tool calls, with draft counters per phase (Plan D, D0; tools/decode_report.py).
+# Log-only, on; EXL3_DECODE_STATS=0 turns it off.
+COPY patch_exllamav3_decode_stats.py /tmp/
+RUN python3 /tmp/patch_exllamav3_decode_stats.py && rm /tmp/patch_exllamav3_decode_stats.py
+
 # Fallback sampling for requests that set none: the model's generation_config.json
 COPY sampler_overrides/qwen38.yml /app/sampler_overrides/qwen38.yml
 COPY config.yml /app/config.yml
@@ -209,7 +215,8 @@ ENV EXL3_INT8_GEMV=0 \
     EXL3_HIST_STASH=1 \
     EXL3_CONV_CKPT=2 \
     EXL3_LASTPAGE=1 \
-    EXL3_PREFIX_DIAG=1
+    EXL3_PREFIX_DIAG=1 \
+    EXL3_DECODE_STATS=1
 
 RUN { echo "torch=$(python3 -c 'import importlib.metadata as m; print(m.version("torch"))')"; \
       echo "exllamav3=${EXLLAMAV3_REF} $(git -C /opt/src/exllamav3 rev-parse HEAD)"; \

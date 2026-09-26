@@ -13,6 +13,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/Qwen3.8-Flash-Next-EXL3}"
 exec docker run --rm --gpus all \
     -v "$HERE:/tests:ro" \
+    -v "$HERE/../tools:/tools:ro" \
     -v "$MODEL_DIR/chat_template.jinja:/tests_data/chat_template.jinja:ro" \
     -e TEMPLATE=/tests_data/chat_template.jinja \
     -w /app --entrypoint python3 "${IMAGE:-qwen38-exl3-tabby:latest}" /tests/run.py "$@"
