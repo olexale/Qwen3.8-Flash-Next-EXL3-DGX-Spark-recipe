@@ -124,7 +124,7 @@ passes them to the container.
 | `EXL3_MOE_FUSED_UNIFORM` | `1` | the fused MoE kernel (`patch_exllamav3_fused_moe.py`); `0` restores the fork's per-expert path (about 2x slower short prompts and concurrent decode) |
 | `EXL3_QSA_STAGE` | `1` | sparse attention in prefill dequantizes the 8-bit K/V once per layer (`patch_exllamav3_qsa_stage.py`, bit-identical); `0` = dequantize per gathered tile, ~8% slower long prompts |
 | `EXL3_GDN_NOCOPY` | `1` | GatedDeltaNet prefill without four full-tensor copies (`patch_exllamav3_gdn_nocopy.py`, bit-identical); `0` = the fork's copies, ~1–2% slower long prompts |
-| `EXL3_PLD` | `1` | prompt-lookup drafting alongside MTP (`patch_exllamav3_pld.py`): when the output repeats text in the context (edit tool calls, file rewrites), draft the continuation of the match instead of the rest of the MTP chain (if the MTP head's first token agrees, `EXL3_PLD_GATE=1`). Outputs unchanged (drafts are verified); through the API edit tool calls 82 → 103 tok/s, whole-file rewrites 85 → 132. `0` turns it off |
+| `EXL3_PLD` | `1` | prompt-lookup drafting alongside MTP (`patch_exllamav3_pld.py`): when the output repeats text in the context (edit tool calls, file rewrites), draft the continuation of the match instead of the rest of the MTP chain (if the MTP head's first token agrees, `EXL3_PLD_GATE=1`). Outputs unchanged (drafts are verified); through the API edit tool calls 82 → 103 tok/s, whole-file rewrites 85 → 132; in real pi sessions (`tools/pi_sessions_ab.sh`, 2026-09-27) tool calls +7%, thinking unchanged, about 2% of all decode time on an edit-heavy task. `0` turns it off |
 | `EXL3_PLD_START` / `EXL3_PLD_MAX` / `EXL3_PLD_MIN_MATCH` | `7` / `11` / `8` | lookup draft length (first, and after a fully accepted lookup round), and the shortest match used. The cap is also limited by the MoE decode row limit minus one; `EXL3_PLD=1` keeps `EXL3_PLD_MAX` rows of recurrent-state history per batch slot (~113 MB each above the 5 MTP needs) |
 | `EXL3_MOE_BSZN_MAX` | `16` | largest verify batch (rows) the fused decode MoE kernels take (`patch_exllamav3_bszn16.py`). 16 keeps 9–16-row verifies (long lookup drafts, two or three sessions drafting) off the ~45 ms slower prefill kernel: three sessions 54 → 62 tok/s together. `8` = the old limit, bit-identical to before |
 | `EXL3_HIST_STASH` | `1` | recurrent checkpoints at every page boundary of the output, copied from the speculative-decoding rollback history (`patch_exllamav3_hist_stash.py`; bit-identical to the fork's own checkpoints), so a follow-up turn resumes at the end of the previous answer instead of prefilling it again: about 0.2 s less time to first token per agent turn. `0` = the fork's checkpoints every 2,048 tokens |
@@ -185,7 +185,8 @@ What keeps it fast, so keep these when you edit:
 - `patch_exllamav3_pld.py` + `patch_exllamav3_bszn16.py` (`EXL3_PLD=1`,
   `EXL3_PLD_MAX=11`, `EXL3_MOE_BSZN_MAX=16`) and `max_batch_size: 3` in
   `config.yml`: edit tool calls and file rewrites decode 25–55% faster, three
-  sessions 15% faster. Each batch slot keeps ~113 MB of GatedDeltaNet rollback
+  sessions 15% faster (synthetic turns; in real pi sessions tool calls are ~7%
+  faster, ~2% of all decode time). Each batch slot keeps ~113 MB of GatedDeltaNet rollback
   history per drafted token, so the cap and the batch size set the memory: cap 15
   at batch 4 measured 84 GiB. Details:
   [PLAN_B_DECODE.md](PLAN_B_DECODE.md#findings-2026-09-25).
@@ -236,3 +237,20 @@ Run it on every new image before tagging it `:latest`. Engine-level checks that 
 and a stopped TabbyAPI stay in `tools/` (`hist_stash_test.py`, `conv_ckpt_test.py`, `greedy_ab.py`,
 `logit_dump.py`).
 
+**Real-traffic A/B** (keep/drop of an engine setting): `tools/pi_sessions_ab.sh` runs the
+owner's own pi (`pi -p`, on the Mac) through scripted sessions from `tools/pi_sessions/prompts.md`,
+one pass per arm on a freshly restarted server, and restores the server afterwards:
+
+```bash
+docker/tabbyapi/tools/pi_sessions_ab.sh "EXL3_PLD=0" "EXL3_PLD=1"
+```
+
+The default task, `review`, starts from `tools/pi_sessions/fixtures/tictactoe` (a small web app
+with six planted bugs): review it, then fix and test. One pass takes 8–12 minutes (85–95% of that
+is decode) and gives ~20k thinking and 13–18k tool-call tokens, edits included. `JOBS=3
+TASKS=review,review,review` runs three sessions at once. The report compares tok/s per phase with
+bootstrap CIs, then ms per round (what the setting costs) and tokens per round (what it gains):
+one pass moves tok/s by up to ~8% with what the model happens to write, so judge by those two.
+Synthetic prompts overstated both prompt lookup (+25–55% → +7% on tool calls) and speculative
+sampling (+10% → +0.3%), so check a decode lever here before keeping it. Nothing else should use
+the server during a run.

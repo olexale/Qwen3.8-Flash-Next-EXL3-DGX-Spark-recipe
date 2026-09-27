@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Tic-tac-toe</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: grid; place-items: center; gap: 12px; margin-top: 40px; }
+    #board { display: grid; grid-template-columns: repeat(3, 80px); gap: 4px; }
+    .cell { width: 80px; height: 80px; font-size: 40px; }
+    .cell.win { background: #c8f7c5; }
+  </style>
+</head>
+<body>
+  <div id="status"></div>
+  <div id="board"></div>
+  <div>
+    <button id="undo">Undo</button>
+    <button id="new">New game</button>
+  </div>
+  <div id="score"></div>
+  <script type="module" src="ui.js"></script>
+</body>
+</html>

@@ -482,3 +482,23 @@ per-shape CUDA graphs and buffers of 9–16-row verifies. It is ~2% over the ~80
 budget; cap 9 would save ~0.7 GiB more at some cost on rewrites (111 vs 119 tok/s engine).
 `ctxfill.py` needs `MBS=3` now (its default 16 batch slots x 12 history steps does not fit
 next to the model).
+
+### Real-traffic check (2026-09-27): kept
+
+The recorded-pi-session check this plan asked for, done with scripted real pi sessions instead
+(`tools/pi_sessions_ab.sh`, task `review`, one sequential pass per arm, fresh server each,
+`EXL3_PLD=0` vs `1` with the 16-row MoE kept in both):
+
+| phase (share of decode time) | ms per round, off → on | tokens per round, off → on | tok/s, on vs off |
+|---|---:|---:|---:|
+| tool calls (~30%) | 61.0 → 66.0 | 4.62 → 5.35 | **+7.1%** [95% CI +2.4, +12.4] |
+| thinking (~62%) | 49.9 → 49.5 | 2.70 → 2.48 | −7.6% [−15.6, +2.4] |
+| answer text (~7%) | 52.3 → 52.1 | 2.98 → 2.91 | about equal |
+
+Lookup costs ~8% per tool-call round and gains ~16% tokens per round. Thinking rounds cost the
+same; the thinking tok/s gap is that pass's content (MTP acceptance 69.1% vs 64.5%, lookup in 146
+of ~9,000 rounds), not lookup. Net: about 2% of all decode time on this edit-heavy task, less on
+the owner's logged mix (lookup fired in 9% of tool rounds there, against ~28% here). The owner
+kept it (~3 GiB of memory for ~1–2%). The synthetic turns above (+25–55%) overstate it because
+they are almost all copying.
+
